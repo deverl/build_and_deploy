@@ -1,0 +1,119 @@
+{
+    "dirs": {
+        "vanguard": "/root/vanguard",
+        "jaguar": "/root/vanguard/jaguar"
+    },
+    "steps": {
+        "full": [
+            { "text": "git pull" },
+            {
+                "text": "Get build merges",
+                "command": "jaguar/tools/cicd/get_build_merges.sh -v | tee /tmp/changes.txt"
+            },
+            { "text": "git status" },
+            { "text": "git pull" },
+            { "text": "Make", "command": "./make.sh current" },
+            {
+                "text": "git diff",
+                "help": "You should only see changes to api.json and version files"
+            },
+            {
+                "text": "Commit version changes",
+                "command": "git commit -a -m \"rc build\" && git push"
+            },
+            { "text": "Promote to rc", "command": "./promote.sh latest rc" },
+            {
+                "text": "Deploy to rc",
+                "command": "cluster/tools/reroll_namespace_all.sh rc -j 3 --one",
+                "input": "n\n"
+            },
+            { "help": "TEST PRODUCT FUNCTIONALITY ON RC SWIMLANE" },
+            {
+                "text": "Run playwright tests",
+                "command": "docker run -it --rm --name playwright-headless --ipc=host -v /tmp/.X11-unix:/tmp/.X11-unix -v ~/vanguard:/vanguard mcr.microsoft.com/playwright:v1.56.1-noble /bin/bash -c \"cd /vanguard/e2e && npx playwright test --config playwright.all.config.ts -j 5\""
+            },
+            {
+                "text": "Promote to prod",
+                "command": "./promote.sh latest prod"
+            },
+            {
+                "text": "Deploy to prod",
+                "command": "cluster/tools/reroll_namespace_all.sh prod -j 2 --one",
+                "input": "n\n"
+            },
+            { "text": "Promote to dev", "command": "./promote.sh latest dev" },
+            {
+                "text": "Deploy to dev",
+                "command": "cluster/tools/reroll_namespace_all.sh dev -j 2 --one",
+                "input": "n\n"
+            },
+            {
+                "text": "Promote to staging",
+                "command": "./promote.sh latest staging"
+            },
+            {
+                "text": "Deploy to staging",
+                "command": "cluster/tools/reroll_namespace_all.sh staging -j 2 --one",
+                "input": "n\n"
+            },
+            {
+                "text": "Rotate all images",
+                "command": "rotate-all-images-wrapper.sh"
+            },
+            { "text": "-- quit --" }
+        ],
+        "backend": [
+            { "text": "git pull" },
+            {
+                "text": "Get build merges",
+                "command": "jaguar/tools/cicd/get_build_merges.sh -v | tee /tmp/changes.txt"
+            },
+            { "text": "git status" },
+            { "text": "git pull" },
+            { "text": "Make", "command": "cd jaguar ; ./make.sh current" },
+            {
+                "text": "git diff",
+                "help": "You should only see changes to api.json and version files"
+            },
+            {
+                "text": "Commit version changes",
+                "command": "git commit -a -m \"rc build\" && git push"
+            },
+            { "text": "Promote to rc", "command": "./promote.sh latest rc" },
+            {
+                "text": "Deploy to rc",
+                "command": "cluster/tools/reroll_namespace_all.sh rc -j 3 --one",
+                "input": "n\n"
+            },
+            {
+                "text": "Promote to prod",
+                "command": "./promote.sh latest prod"
+            },
+            {
+                "text": "Deploy to prod",
+                "command": "cluster/tools/reroll_namespace_all.sh prod -j 2 --one",
+                "input": "n\n"
+            },
+            { "text": "Promote to dev", "command": "./promote.sh latest dev" },
+            {
+                "text": "Deploy to dev",
+                "command": "cluster/tools/reroll_namespace_all.sh dev -j 2 --one",
+                "input": "n\n"
+            },
+            {
+                "text": "Promote to staging",
+                "command": "./promote.sh latest staging"
+            },
+            {
+                "text": "Deploy to staging",
+                "command": "cluster/tools/reroll_namespace_all.sh staging -j 2 --one",
+                "input": "n\n"
+            },
+            {
+                "text": "Rotate all images",
+                "command": "rotate-all-images-wrapper.sh"
+            },
+            { "text": "-- quit --" }
+        ]
+    }
+}
