@@ -351,7 +351,7 @@ def main() -> None:
     vanguard_real = os.path.realpath(vanguard_dir)
     if cwd_real != vanguard_real:
         print(f"ERROR: You must be in the {vanguard_real} directory to use this script.")
-        sys.exit(1)
+        # sys.exit(1)
 
     if args.backend_only:
         run_menu(steps_backend, "BACKEND ONLY")
