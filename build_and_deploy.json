@@ -5,14 +5,13 @@
     },
     "steps": {
         "full": [
-            { "text": "git pull", "auto_advance": true },
+            { "text": "git pull" },
             {
                 "text": "Get build merges",
-                "command": "jaguar/tools/cicd/get_build_merges.sh -v | tee /tmp/changes.txt",
-                "auto_advance": true
+                "command": "jaguar/tools/cicd/get_build_merges.sh -v | tee /tmp/changes.txt"
             },
-            { "text": "git status", "auto_advance": true },
-            { "text": "git pull", "auto_advance": false },
+            { "text": "git status"},
+            { "text": "git pull" },
             { "text": "Make", "command": "./make.sh current" },
             {
                 "text": "git diff",
@@ -72,12 +71,11 @@
             { "text": "git pull", "auto_advance": true },
             {
                 "text": "Get build merges",
-                "command": "jaguar/tools/cicd/get_build_merges.sh -v | tee /tmp/changes.txt",
-                "auto_advance": true
+                "command": "jaguar/tools/cicd/get_build_merges.sh -v | tee /tmp/changes.txt"
             },
-            { "text": "git status", "auto_advance": true },
-            { "text": "git pull", "auto_advance": true },
-            { "text": "Make", "command": "cd jaguar ; ./make.sh current", "auto_advance": true },
+            { "text": "git status" },
+            { "text": "git pull" },
+            { "text": "Make", "command": "cd jaguar ; ./make.sh current" },
             {
                 "text": "git diff",
                 "help": "You should only see changes to api.json and version files"
