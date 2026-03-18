@@ -12,7 +12,7 @@
             },
             { "text": "git status"},
             { "text": "git pull" },
-            { "text": "Make", "command": "./make.sh current" },
+            { "text": "Make", "command": "./make.sh current", "help": "Runs ./make.sh current" },
             {
                 "text": "git diff",
                 "help": "You should only see changes to api.json and version files"
@@ -36,6 +36,7 @@
                     "echo \"After docker starts up, run this on your computer: ssh -C -L 9323:localhost:9323 build-box\"",
                     "echo \"Then open http://localhost:9323 in your browser\"",
                     "docker run -it --rm --name playwright-headless --ipc=host -v /tmp/.X11-unix:/tmp/.X11-unix -p 9323:9323 -v ~/vanguard:/vanguard mcr.microsoft.com/playwright:v1.56.1-noble /bin/bash -c \"cd /vanguard/e2e && npx playwright show-report --host 0.0.0.0\""
+                ]
             },
             {
                 "text": "Promote to prod",
