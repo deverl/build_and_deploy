@@ -121,7 +121,13 @@ def draw_menu(steps: list, selected: int, mode_label: str) -> None:
 # Command execution
 # ─────────────────────────────────────────────
 
-def run_command(step: dict) -> int:
+def run_command(
+    step: dict,
+    *,
+    suppress_pre_separator: bool = False,
+    suppress_post_separator: bool = False,
+    suppress_command_header: bool = False,
+) -> int:
     """
     Run the command for a step, streaming output live.
     Returns the exit code.
@@ -134,8 +140,10 @@ def run_command(step: dict) -> int:
     if help_:
         print(f"\n{YELLOW}ℹ  {help_}{RESET}\n")
 
-    print(f"{BOLD}>>> {command}{RESET}")
-    print("─" * min(TERM_WIDTH, 72))
+    if not suppress_command_header:
+        print(f"{BOLD}>>> {command}{RESET}")
+    if not suppress_pre_separator:
+        print("─" * min(TERM_WIDTH, 72))
 
     if stdin_ is not None:
         # Feed preset input; use PIPE for stdin
@@ -150,7 +158,8 @@ def run_command(step: dict) -> int:
         # Stream output live via a PTY so programs that check isatty() behave normally
         exit_code = _run_with_pty(command)
 
-    print("─" * min(TERM_WIDTH, 72))
+    if not suppress_post_separator:
+        print("─" * min(TERM_WIDTH, 72))
     return exit_code
 
 
@@ -308,7 +317,12 @@ def run_menu(steps: list, mode_label: str) -> None:
                         print(f"\n{YELLOW}Running on_error commands…{RESET}\n")
                         for cmd in on_error:
                             if isinstance(cmd, str):
-                                run_command({"command": cmd})
+                                run_command(
+                                    {"command": cmd},
+                                    suppress_pre_separator=True,
+                                    suppress_post_separator=True,
+                                    suppress_command_header=True,
+                                )
                         print()
                     print(f"\n{RED}⚠  Step exited with code {exit_code}.{RESET}  "
                           "Press any key to return to menu…")
