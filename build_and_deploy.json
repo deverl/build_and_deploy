@@ -5,13 +5,14 @@
     },
     "steps": {
         "full": [
-            { "text": "git pull" },
+            { "text": "git pull", "auto_advance": true },
             {
                 "text": "Get build merges",
-                "command": "jaguar/tools/cicd/get_build_merges.sh -v | tee /tmp/changes.txt"
+                "command": "jaguar/tools/cicd/get_build_merges.sh -v | tee /tmp/changes.txt",
+                "auto_advance": true
             },
-            { "text": "git status" },
-            { "text": "git pull" },
+            { "text": "git status", "auto_advance": true },
+            { "text": "git pull", "auto_advance": false },
             { "text": "Make", "command": "./make.sh current" },
             {
                 "text": "git diff",
@@ -25,12 +26,17 @@
             {
                 "text": "Deploy to rc",
                 "command": "cluster/tools/reroll_namespace_all.sh rc -j 3 --one",
-                "input": "n\n"
+                "input": "y\nn\n"
             },
             { "help": "TEST PRODUCT FUNCTIONALITY ON RC SWIMLANE" },
             {
                 "text": "Run playwright tests",
-                "command": "docker run -it --rm --name playwright-headless --ipc=host -v /tmp/.X11-unix:/tmp/.X11-unix -v ~/vanguard:/vanguard mcr.microsoft.com/playwright:v1.56.1-noble /bin/bash -c \"cd /vanguard/e2e && npx playwright test --config playwright.all.config.ts -j 5\""
+                "command": "docker run -it --rm --name playwright-headless --ipc=host -v /tmp/.X11-unix:/tmp/.X11-unix -v ~/vanguard:/vanguard mcr.microsoft.com/playwright:v1.56.1-noble /bin/bash -c \"cd /vanguard/e2e && npx playwright test --config playwright.all.config.ts -j 5\"",
+                "on_error": [
+                    "echo \"Playwright tests failed!\"",
+                    "echo \"After docker starts up, run this on your computer: ssh -C -L 9323:localhost:9323 build-box\"",
+                    "echo \"Then open http://localhost:9323 in your browser\"",
+                    "docker run -it --rm --name playwright-headless --ipc=host -v /tmp/.X11-unix:/tmp/.X11-unix -p 9323:9323 -v ~/vanguard:/vanguard mcr.microsoft.com/playwright:v1.56.1-noble /bin/bash -c \"cd /vanguard/e2e && npx playwright show-report --host 0.0.0.0\""
             },
             {
                 "text": "Promote to prod",
@@ -39,13 +45,13 @@
             {
                 "text": "Deploy to prod",
                 "command": "cluster/tools/reroll_namespace_all.sh prod -j 2 --one",
-                "input": "n\n"
+                "input": "y\nn\n"
             },
             { "text": "Promote to dev", "command": "./promote.sh latest dev" },
             {
                 "text": "Deploy to dev",
                 "command": "cluster/tools/reroll_namespace_all.sh dev -j 2 --one",
-                "input": "n\n"
+                "input": "y\nn\n"
             },
             {
                 "text": "Promote to staging",
@@ -54,7 +60,7 @@
             {
                 "text": "Deploy to staging",
                 "command": "cluster/tools/reroll_namespace_all.sh staging -j 2 --one",
-                "input": "n\n"
+                "input": "y\nn\n"
             },
             {
                 "text": "Rotate all images",
@@ -63,14 +69,15 @@
             { "text": "-- quit --" }
         ],
         "backend": [
-            { "text": "git pull" },
+            { "text": "git pull", "auto_advance": true },
             {
                 "text": "Get build merges",
-                "command": "jaguar/tools/cicd/get_build_merges.sh -v | tee /tmp/changes.txt"
+                "command": "jaguar/tools/cicd/get_build_merges.sh -v | tee /tmp/changes.txt",
+                "auto_advance": true
             },
-            { "text": "git status" },
-            { "text": "git pull" },
-            { "text": "Make", "command": "cd jaguar ; ./make.sh current" },
+            { "text": "git status", "auto_advance": true },
+            { "text": "git pull", "auto_advance": true },
+            { "text": "Make", "command": "cd jaguar ; ./make.sh current", "auto_advance": true },
             {
                 "text": "git diff",
                 "help": "You should only see changes to api.json and version files"
@@ -83,7 +90,7 @@
             {
                 "text": "Deploy to rc",
                 "command": "cluster/tools/reroll_namespace_all.sh rc -j 3 --one",
-                "input": "n\n"
+                "input": "y\nn\n"
             },
             {
                 "text": "Promote to prod",
@@ -92,13 +99,13 @@
             {
                 "text": "Deploy to prod",
                 "command": "cluster/tools/reroll_namespace_all.sh prod -j 2 --one",
-                "input": "n\n"
+                "input": "y\nn\n"
             },
             { "text": "Promote to dev", "command": "./promote.sh latest dev" },
             {
                 "text": "Deploy to dev",
                 "command": "cluster/tools/reroll_namespace_all.sh dev -j 2 --one",
-                "input": "n\n"
+                "input": "y\nn\n"
             },
             {
                 "text": "Promote to staging",
@@ -107,7 +114,7 @@
             {
                 "text": "Deploy to staging",
                 "command": "cluster/tools/reroll_namespace_all.sh staging -j 2 --one",
-                "input": "n\n"
+                "input": "y\nn\n"
             },
             {
                 "text": "Rotate all images",

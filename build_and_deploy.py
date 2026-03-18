@@ -4,10 +4,12 @@ build_and_deploy.py
 
 Interactive terminal menu for running build/deploy steps in sequence.
 Each step is defined as a dict with optional keys:
-  text    - display label (also used as command if no 'command' key)
-  command - shell command to run
-  help    - informational note shown in the menu and before running
-  input   - string to feed as stdin to the command (e.g. "n\n")
+  text         - display label (also used as command if no 'command' key)
+  command      - shell command to run
+  help         - informational note shown in the menu and before running
+  input        - string to feed as stdin to the command (e.g. "n\n")
+  auto_advance - if true, on success automatically run the next step
+  on_error     - array of shell commands to run synchronously when the step fails
 
 Steps with only a 'help' key are display-only (no-op on Enter).
 """
@@ -247,21 +249,44 @@ def run_menu(steps: list, mode_label: str) -> None:
                 clear()
                 sys.exit(0)
 
-            # Run the step
-            clear()
-            exit_code = run_command(step)
+            # Run the step (and possibly more if auto_advance)
+            while True:
+                step = steps[selected]
+                clear()
+                exit_code = run_command(step)
 
-            if exit_code != 0:
-                print(f"\n{RED}⚠  Step exited with code {exit_code}.{RESET}  "
-                      "Press any key to return to menu…")
-                read_key()
-            else:
+                if exit_code != 0:
+                    on_error = step.get("on_error")
+                    if on_error and isinstance(on_error, list):
+                        print(f"\n{YELLOW}Running on_error commands…{RESET}\n")
+                        for cmd in on_error:
+                            if isinstance(cmd, str):
+                                run_command({"command": cmd})
+                        print()
+                    print(f"\n{RED}⚠  Step exited with code {exit_code}.{RESET}  "
+                          "Press any key to return to menu…")
+                    read_key()
+                    break
+
                 advanced = next_runnable(steps, selected)
-                if advanced != selected:
-                    selected = advanced
-                print(f"\n{GREEN}✓  Step complete.{RESET}  "
-                      "Press any key to continue to the next step…")
-                read_key()
+                if advanced == selected:
+                    print(f"\n{GREEN}✓  Step complete.{RESET}  "
+                          "Press any key to continue to the next step…")
+                    read_key()
+                    break
+
+                selected = advanced  # Always select next item on success
+                if not step.get("auto_advance"):
+                    print(f"\n{GREEN}✓  Step complete.{RESET}  "
+                          "Press any key to continue to the next step…")
+                    read_key()
+                    break
+
+                next_step = steps[selected]
+                if next_step.get("text") == "-- quit --":
+                    clear()
+                    sys.exit(0)
+                # Loop to run the next step
 
 
 # ─────────────────────────────────────────────
