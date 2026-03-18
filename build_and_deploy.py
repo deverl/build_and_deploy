@@ -20,6 +20,7 @@ import os
 import pty
 import select
 import shutil
+import signal
 import subprocess
 import sys
 import termios
@@ -168,7 +169,22 @@ def _run_with_pty(command: str) -> int:
 
     # Parent: relay output from child PTY to stdout
     os.close(slave_fd)
+    old_sigint_handler = signal.getsignal(signal.SIGINT)
+
+    def _forward_sigint(signum, frame) -> None:
+        """Forward CTRL+C (SIGINT) only to the child process group."""
+        try:
+            # start_new_session=True makes the child's session leader also its process group.
+            os.killpg(proc.pid, signal.SIGINT)
+        except Exception:
+            # Fall back to sending to just the immediate process.
+            try:
+                proc.send_signal(signal.SIGINT)
+            except Exception:
+                pass
+
     try:
+        signal.signal(signal.SIGINT, _forward_sigint)
         while True:
             try:
                 rlist, _, _ = select.select([master_fd], [], [], 0.1)
@@ -204,6 +220,11 @@ def _run_with_pty(command: str) -> int:
                     sys.stdout.buffer.flush()
                 break
     finally:
+        # Restore the parent handler so CTRL+C behaves normally after the step ends.
+        try:
+            signal.signal(signal.SIGINT, old_sigint_handler)
+        except Exception:
+            pass
         try:
             os.close(master_fd)
         except OSError:
