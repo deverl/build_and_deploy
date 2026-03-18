@@ -87,7 +87,7 @@ def _is_noop(step: dict) -> bool:
 
 def draw_menu(steps: list, selected: int, mode_label: str) -> None:
     clear()
-    header = f"[ {mode_label} ]  ↑/↓ to move, ENTER to run, q to quit"
+    header = f"[ {mode_label} ]  ↑/↓ or j/k to move, ENTER to run, q to quit"
     print(f"{BOLD}{header}{RESET}")
     print()
 
@@ -258,7 +258,7 @@ def run_menu(steps: list, mode_label: str) -> None:
         key = read_key()
 
         # Navigation
-        if key in ("\x1b[A", "\x1b[D"):   # Up / Left
+        if key in ("\x1b[A", "\x1b[D", "k", "K"):   # Up / Left (vi: k)
             new = selected - 1
             while new >= 0 and _is_noop(steps[new]):
                 new -= 1
@@ -269,7 +269,7 @@ def run_menu(steps: list, mode_label: str) -> None:
                     new -= 1
             selected = new
 
-        elif key in ("\x1b[B", "\x1b[C"):  # Down / Right
+        elif key in ("\x1b[B", "\x1b[C", "j", "J"):  # Down / Right (vi: j)
             new = selected + 1
             while new < len(steps) and _is_noop(steps[new]):
                 new += 1
