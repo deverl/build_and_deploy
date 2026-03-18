@@ -319,14 +319,19 @@ def run_menu(steps: list, mode_label: str) -> None:
 # Entry point
 # ─────────────────────────────────────────────
 
-def load_steps() -> tuple:
+def load_steps(json_file: str | None = None) -> tuple:
     """
     Load step lists from build_and_deploy.json in the same directory
     as this script. Exits with code 1 if the file is missing or invalid.
     Returns (vanguard_dir, steps_full, steps_backend).
     """
-    json_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                             "build_and_deploy.json")
+    if json_file:
+        json_path = os.path.abspath(os.path.expanduser(json_file))
+    else:
+        json_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            "build_and_deploy.json",
+        )
     if not os.path.exists(json_path):
         print(f"ERROR: Steps file not found: {json_path}", file=sys.stderr)
         sys.exit(1)
@@ -357,7 +362,21 @@ def load_steps() -> tuple:
         print(f"ERROR: {json_path} \"steps\" must contain \"full\" and \"backend\" arrays.",
               file=sys.stderr)
         sys.exit(1)
+    _ensure_quit_step(full)
+    _ensure_quit_step(backend)
     return vanguard_dir, full, backend
+
+
+def _ensure_quit_step(steps: list) -> None:
+    """
+    Ensure the step list ends with the quit sentinel step.
+    Mutates the list in place.
+    """
+    if not isinstance(steps, list):
+        return
+    if steps and isinstance(steps[-1], dict) and steps[-1].get("text") == "-- quit --":
+        return
+    steps.append({"text": "-- quit --"})
 
 
 def main() -> None:
@@ -374,9 +393,14 @@ def main() -> None:
         action="store_true",
         help="Skip check that the script is run from the expected directory",
     )
+    parser.add_argument(
+        "-f", "--json_file",
+        default=None,
+        help="Path to a JSON file containing step definitions (overrides build_and_deploy.json)",
+    )
     args = parser.parse_args()
 
-    vanguard_dir, steps_full, steps_backend = load_steps()
+    vanguard_dir, steps_full, steps_backend = load_steps(args.json_file)
 
     if not args.skip_directory_check:
         # Compare resolved paths so symlinks don't trip the check.

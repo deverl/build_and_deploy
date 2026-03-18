@@ -81,8 +81,7 @@
             {
                 "text": "Rotate all images",
                 "command": "rotate-all-images-wrapper.sh"
-            },
-            { "text": "-- quit --" }
+            }
         ],
         "backend": [
             { "text": "git pull", "auto_advance": true },
@@ -140,9 +139,6 @@
             {
                 "text": "Rotate all images",
                 "command": "rotate-all-images-wrapper.sh"
-            },
-            {
-                "text": "-- quit --"
             }
         ]
     }

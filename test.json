@@ -1,0 +1,47 @@
+{
+    "dirs": {
+        "vanguard": "/root/vanguard",
+        "jaguar": "/root/vanguard/jaguar"
+    },
+    "steps": {
+        "full": [
+            {
+                "text": "git pull"
+            },
+            {
+                "text": "./generate_error.sh",
+                "on_error": [
+                    "echo \"Error generated line 1!\"",
+                    "echo \"Error generated line 2!\"",
+                    "echo \"Error generated line 3!\"",
+                    "echo \"Error generated line 4!\""
+                ]
+            },
+            {
+                "text": "Get build merges",
+                "command": "jaguar/tools/cicd/get_build_merges.sh -v | tee /tmp/changes.txt"
+            },
+            {
+                "text": "git status"
+            },
+            {
+                "text": "Promote to rc",
+                "command": "./promote.sh latest rc",
+                "input": "y\nn\n"
+            },
+            {
+                "text": "Deploy to rc",
+                "command": "cluster/tools/reroll_namespace_all.sh rc -j 3 --one"
+            }
+        ],
+        "backend": [
+            {
+                "text": "git pull"
+            },
+            {
+                "text": "Get build merges",
+                "command": "jaguar/tools/cicd/get_build_merges.sh -v | tee /tmp/changes.txt"
+            }
+        ]
+    }
+}
