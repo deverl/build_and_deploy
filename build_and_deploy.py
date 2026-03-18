@@ -369,16 +369,22 @@ def main() -> None:
         action="store_true",
         help="Use backend-only step list",
     )
+    parser.add_argument(
+        "-s", "--skip_directory_check",
+        action="store_true",
+        help="Skip check that the script is run from the expected directory",
+    )
     args = parser.parse_args()
 
     vanguard_dir, steps_full, steps_backend = load_steps()
 
-    # Compare resolved paths so symlinks don't trip the check.
-    cwd_real = os.path.realpath(os.getcwd())
-    vanguard_real = os.path.realpath(vanguard_dir)
-    if cwd_real != vanguard_real:
-        print(f"ERROR: You must be in the {vanguard_real} directory to use this script.")
-        sys.exit(1)
+    if not args.skip_directory_check:
+        # Compare resolved paths so symlinks don't trip the check.
+        cwd_real = os.path.realpath(os.getcwd())
+        vanguard_real = os.path.realpath(vanguard_dir)
+        if cwd_real != vanguard_real:
+            print(f"ERROR: You must be in the {vanguard_real} directory to use this script.")
+            sys.exit(1)
 
     if args.backend_only:
         run_menu(steps_backend, "BACKEND ONLY")
