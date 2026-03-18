@@ -155,20 +155,26 @@ def run_command(step: dict) -> int:
 
 def _run_with_pty(command: str) -> int:
     """Run command in a pseudo-terminal so interactive output works correctly."""
-    pid, master_fd = pty.fork()
+    master_fd, slave_fd = pty.openpty()
 
-    if pid == 0:
-        # Child
-        os.execvp("/bin/bash", ["/bin/bash", "-c", command])
-        sys.exit(1)
+    proc = subprocess.Popen(
+        ["bash", "-c", command],
+        stdin=slave_fd,
+        stdout=slave_fd,
+        stderr=slave_fd,
+        start_new_session=True,
+        close_fds=True,
+    )
 
     # Parent: relay output from child PTY to stdout
+    os.close(slave_fd)
     try:
         while True:
             try:
                 rlist, _, _ = select.select([master_fd], [], [], 0.1)
             except (ValueError, OSError):
                 break
+
             if rlist:
                 try:
                     data = os.read(master_fd, 4096)
@@ -178,11 +184,32 @@ def _run_with_pty(command: str) -> int:
                     break
                 sys.stdout.buffer.write(data)
                 sys.stdout.buffer.flush()
-    finally:
-        os.close(master_fd)
 
-    _, status = os.waitpid(pid, 0)
-    return os.waitstatus_to_exitcode(status)
+            if proc.poll() is not None:
+                # Drain any remaining output without waiting too long.
+                while True:
+                    try:
+                        rlist, _, _ = select.select([master_fd], [], [], 0)
+                    except (ValueError, OSError):
+                        break
+                    if not rlist:
+                        break
+                    try:
+                        data = os.read(master_fd, 4096)
+                    except OSError:
+                        break
+                    if not data:
+                        break
+                    sys.stdout.buffer.write(data)
+                    sys.stdout.buffer.flush()
+                break
+    finally:
+        try:
+            os.close(master_fd)
+        except OSError:
+            pass
+
+    return proc.wait()
 
 
 # ─────────────────────────────────────────────

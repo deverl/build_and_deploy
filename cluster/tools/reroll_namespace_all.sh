@@ -2,6 +2,7 @@
 
 for i in {1..10}
 do
-  lorem -l 5
+  l="$i: $(lorem -l 5)"
+  echo "$l"
   sleep 1
 done

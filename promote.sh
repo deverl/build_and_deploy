@@ -6,7 +6,7 @@ confirm_cluster
 
 for i in {1..5}
 do
-  lorem -l 5
+  echo "$i: $(lorem -l 5)"
   sleep 1
 done
 
