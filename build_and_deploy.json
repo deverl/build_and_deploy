@@ -46,7 +46,7 @@
             },
             {
                 "text": "Run playwright tests",
-                "command": "docker run -it --rm --name playwright-headless --ipc=host -v /tmp/.X11-unix:/tmp/.X11-unix -v ~/vanguard:/vanguard mcr.microsoft.com/playwright:v1.56.1-noble /bin/bash -c \"cd /vanguard/e2e && npx playwright test --config playwright.all.config.ts -j 5\"",
+                "command": "docker run -it --rm --name playwright-headless --ipc=host -v /tmp/.X11-unix:/tmp/.X11-unix -v ~/vanguard:/vanguard mcr.microsoft.com/playwright:v1.56.1-noble /bin/bash -c \"cd /vanguard/e2e && set -o pipefail && npx playwright test --config playwright.all.config.ts -j 5\"",
                 "on_error": [
                     "echo \"Playwright tests failed!\"",
                     "echo \"After docker starts up, run this on your computer: ssh -C -L 9323:localhost:9323 build-box\"",
