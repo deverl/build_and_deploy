@@ -5,13 +5,16 @@
     },
     "steps": {
         "full": [
-            { "text": "git pull" },
+            {
+                "text": "git pull"
+            },
             {
                 "text": "Get build merges",
                 "command": "jaguar/tools/cicd/get_build_merges.sh -v | tee /tmp/changes.txt"
             },
             {
-                "text": "git status"
+                "text": "git status (fail if changes)",
+                "command": "s=\"$(git status --porcelain)\"; if [ -n \"$s\" ]; then echo \"$s\"; echo \"Uncommitted changes detected\"; exit 1; else echo \"Working tree clean\"; fi"
             },
             {
                 "text": "git pull"
@@ -84,13 +87,16 @@
             }
         ],
         "backend": [
-            { "text": "git pull", "auto_advance": true },
+            {
+                "text": "git pull"
+            },
             {
                 "text": "Get build merges",
                 "command": "jaguar/tools/cicd/get_build_merges.sh -v | tee /tmp/changes.txt"
             },
             {
-                "text": "git status"
+                "text": "git status (fail if changes)",
+                "command": "s=\"$(git status --porcelain)\"; if [ -n \"$s\" ]; then echo \"$s\"; echo \"Uncommitted changes detected\"; exit 1; else echo \"Working tree clean\"; fi"
             },
             {
                 "text": "git pull"
