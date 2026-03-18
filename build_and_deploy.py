@@ -336,7 +336,7 @@ def main() -> None:
 
     if os.getcwd() != "/root/vanguard":
         print("ERROR: You must be in the /root/vanguard directory to use this script.")
-        # sys.exit(1)
+        sys.exit(1)
 
     steps_full, steps_backend = load_steps()
 
