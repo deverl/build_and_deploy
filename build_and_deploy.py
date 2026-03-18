@@ -108,7 +108,6 @@ def draw_menu(steps: list, selected: int, mode_label: str) -> None:
 
         if is_sel:
             # Pad to terminal width so the highlight bar stretches across
-            pad = max(0, TERM_WIDTH - len(row_label) - (len(f"  ({help_})") if help_ else 0))
             print(f"{REVERSE}{row_label}{RESET}{suffix}", end="")
             print()
         else:
@@ -295,9 +294,9 @@ def run_menu(steps: list, mode_label: str) -> None:
 
 def load_steps() -> tuple:
     """
-    Load step lists from build_and_deploy_steps.json in the same directory
-    as this script.  Exits with code 1 if the file is missing or invalid.
-    Returns (steps_full, steps_backend).
+    Load step lists from build_and_deploy.json in the same directory
+    as this script. Exits with code 1 if the file is missing or invalid.
+    Returns (vanguard_dir, steps_full, steps_backend).
     """
     json_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                              "build_and_deploy.json")
@@ -314,13 +313,24 @@ def load_steps() -> tuple:
     if not steps_data or not isinstance(steps_data, dict):
         print(f"ERROR: {json_path} must contain a \"steps\" object.", file=sys.stderr)
         sys.exit(1)
+
+    dirs = data.get("dirs")
+    if not dirs or not isinstance(dirs, dict):
+        print(f'ERROR: {json_path} must contain a "dirs" object.', file=sys.stderr)
+        sys.exit(1)
+    vanguard_dir = dirs.get("vanguard")
+    if not vanguard_dir or not isinstance(vanguard_dir, str):
+        print(f'ERROR: {json_path} "dirs" must contain a "vanguard" string.',
+              file=sys.stderr)
+        sys.exit(1)
+
     full = steps_data.get("full")
     backend = steps_data.get("backend")
     if not full or not backend:
         print(f"ERROR: {json_path} \"steps\" must contain \"full\" and \"backend\" arrays.",
               file=sys.stderr)
         sys.exit(1)
-    return full, backend
+    return vanguard_dir, full, backend
 
 
 def main() -> None:
@@ -334,11 +344,14 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    if os.getcwd() != "/root/vanguard":
-        print("ERROR: You must be in the /root/vanguard directory to use this script.")
-        sys.exit(1)
+    vanguard_dir, steps_full, steps_backend = load_steps()
 
-    steps_full, steps_backend = load_steps()
+    # Compare resolved paths so symlinks don't trip the check.
+    cwd_real = os.path.realpath(os.getcwd())
+    vanguard_real = os.path.realpath(vanguard_dir)
+    if cwd_real != vanguard_real:
+        print(f"ERROR: You must be in the {vanguard_real} directory to use this script.")
+        sys.exit(1)
 
     if args.backend_only:
         run_menu(steps_backend, "BACKEND ONLY")
