@@ -74,29 +74,3 @@ Merge branch 'feat/phopkins/no_logs_in_testing' into 'main'
 Hide logging during testing
 See merge request bidboxpro/vanguard!1683
 ~~~
-[MERGE]: 1b4857dbb Mon Mar 16 10:21:17 2026 -0700 Merge branch 'tmorgan/WARH-2883' into 'main' (commit: 1b4857dbb)
-Merge branch 'tmorgan/WARH-2883' into 'main'
-Log a CRIT if the count of SQL queries exceeds the per-request threshold
-See merge request bidboxpro/vanguard!1914
-~~~
-[MERGE]: 490642507 Mon Mar 16 16:45:14 2026 +0000 Merge branch 'feat/phopkins/get_ci_cd_working' into 'main' (commit: 490642507)
-Merge branch 'feat/phopkins/get_ci_cd_working' into 'main'
-Add CI/CD-specific Docker Compose configuration
-See merge request bidboxpro/vanguard!1918
-~~~
-[MERGE]: 855416130 Mon Mar 16 15:13:10 2026 +0000 Merge branch 'bugs/phopkins/WARH-3493/robust_invoice_generation' into 'main' (commit: 855416130)
-Merge branch 'bugs/phopkins/WARH-3493/robust_invoice_generation' into 'main'
-Refactor logo rendering with reusable and safe `render_image` method
-See merge request bidboxpro/vanguard!1898
-~~~
-[MERGE]: 564ff82a6 Mon Mar 16 14:51:45 2026 +0000 Merge branch 'feat/phopkins/WARH-2848/unifty_is_sku_based_across_back_front_end' into 'main' (commit: 564ff82a6)
-Merge branch 'feat/phopkins/WARH-2848/unifty_is_sku_based_across_back_front_end' into 'main'
-Refactor is_sku_based logic across the system
-See merge request bidboxpro/vanguard!1877
-~~~
-[MERGE]: 3d040cd62 Sun Mar 15 00:51:40 2026 +0000 Merge branch 'feat/phopkins/WARH-3381/blanks_in_ppp_ignored' into 'main' (commit: 3d040cd62)
-Merge branch 'feat/phopkins/WARH-3381/blanks_in_ppp_ignored' into 'main'
-Allow new policy group creation and skip invalid row values
-See merge request bidboxpro/vanguard!1913
-~~~
-EOF

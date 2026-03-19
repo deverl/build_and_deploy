@@ -4,7 +4,7 @@ source cluster/tools/confirm_cluster.sh
 
 confirm_cluster
 
-for i in {1..5}
+for i in {1..3}
 do
   echo "$i: $(lorem -l 5)"
   sleep 1
