@@ -14,7 +14,8 @@ Each step is defined as a dict with optional keys:
   auto_advance - if true, on success automatically run the next step
   on_error     - array of shell commands to run synchronously when the step fails
 
-Steps with only a 'help' key are display-only (no-op on Enter).
+Steps without a 'text' key are display-only section lines (usually just 'help');
+they are skipped by navigation and cannot be run.
 """
 
 import argparse
@@ -22,7 +23,6 @@ import json
 import os
 import shlex
 import shutil
-import subprocess
 import sys
 import tempfile
 import termios
