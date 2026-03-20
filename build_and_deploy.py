@@ -151,22 +151,32 @@ def run_command(
     if stdin_ is not None:
         # Feed preset input, but run under a PTY so interactive scripts
         # behave consistently across macOS/Linux.
-        exit_code = _run_with_pty(command, stdin_bytes=stdin_.encode())
+        exit_code, stdout_needs_newline = _run_with_pty(
+            command, stdin_bytes=stdin_.encode()
+        )
     else:
         # Stream output live via a PTY so programs that check isatty() behave normally
-        exit_code = _run_with_pty(command)
+        exit_code, stdout_needs_newline = _run_with_pty(command)
 
     if not suppress_post_separator:
+        # If the child's last output didn't end with \n (common for prompts), the
+        # cursor is still on that line — print a newline so the separator draws below.
+        if stdout_needs_newline:
+            sys.stdout.write("\n")
         print("─" * min(TERM_WIDTH, 72))
     return exit_code
 
 
-def _run_with_pty(command: str, *, stdin_bytes: bytes | None = None) -> int:
+def _run_with_pty(command: str, *, stdin_bytes: bytes | None = None) -> tuple[int, bool]:
     """Run command in a PTY so interactive output/input works correctly.
 
     Uses pty.fork() rather than openpty()+manual controlling-tty setup because
     some programs read from /dev/tty on Linux, and pty.fork() makes that work
     reliably.
+
+    Returns (exit_code, stdout_needs_newline): the latter is True when the
+    last byte copied to stdout was not a newline, so the next print should
+    start with a newline to avoid drawing on the same line as a prompt.
     """
     pid, master_fd = pty.fork()
 
@@ -208,6 +218,17 @@ def _run_with_pty(command: str, *, stdin_bytes: bytes | None = None) -> int:
         input_injected = False
         inject_deadline = (time.monotonic() + 1.0) if stdin_bytes else None
         last_status: int | None = None
+        last_stdout_byte: int | None = None
+
+        def _write_stdout(data: bytes) -> None:
+            nonlocal last_stdout_byte
+            try:
+                os.write(sys.stdout.fileno(), data)
+            except OSError:
+                pass
+            else:
+                if data:
+                    last_stdout_byte = data[-1]
 
         while True:
             try:
@@ -221,10 +242,7 @@ def _run_with_pty(command: str, *, stdin_bytes: bytes | None = None) -> int:
                 except OSError:
                     break
                 if data:
-                    try:
-                        os.write(sys.stdout.fileno(), data)
-                    except OSError:
-                        pass
+                    _write_stdout(data)
 
                     # Inject scripted input after we see the first prompt/output.
                     if stdin_bytes and not input_injected:
@@ -270,10 +288,7 @@ def _run_with_pty(command: str, *, stdin_bytes: bytes | None = None) -> int:
                         break
                     if not data:
                         break
-                    try:
-                        os.write(sys.stdout.fileno(), data)
-                    except OSError:
-                        pass
+                    _write_stdout(data)
                 break
 
         if last_status is None:
@@ -281,10 +296,14 @@ def _run_with_pty(command: str, *, stdin_bytes: bytes | None = None) -> int:
 
         # Convert waitpid status to an exit code.
         if os.WIFEXITED(last_status):
-            return os.WEXITSTATUS(last_status)
-        if os.WIFSIGNALED(last_status):
-            return 128 + os.WTERMSIG(last_status)
-        return 1
+            code = os.WEXITSTATUS(last_status)
+        elif os.WIFSIGNALED(last_status):
+            code = 128 + os.WTERMSIG(last_status)
+        else:
+            code = 1
+
+        needs_newline = last_stdout_byte is not None and last_stdout_byte != ord("\n")
+        return code, needs_newline
     finally:
         try:
             signal.signal(signal.SIGINT, old_sigint_handler)
