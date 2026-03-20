@@ -163,11 +163,11 @@ def run_command(
             cmd_to_run = command
 
         if not suppress_command_header:
-            print(f"{BOLD}>>> {cmd_to_run}{RESET}")
+            print(f"{BOLD}>>> {command}{RESET}")
         if not suppress_pre_separator:
             print("─" * min(TERM_WIDTH, 72))
 
-        exit_code, stdout_needs_newline = _run_inherit_stdio(cmd_to_run)
+        exit_code = os.system(cmd_to_run)
     finally:
         if path is not None:
             try:
@@ -182,22 +182,6 @@ def run_command(
             sys.stdout.write("\n")
         print("─" * min(TERM_WIDTH, 72))
     return exit_code
-
-
-def _run_inherit_stdio(command: str) -> tuple[int, bool]:
-    """Run ``bash -c command`` with stdin/stdout/stderr inherited from this process."""
-    sys.stdout.flush()
-    sys.stderr.flush()
-    try:
-        proc = subprocess.run(
-            ["bash", "-c", command],
-            stdin=None,
-            stdout=None,
-            stderr=None,
-        )
-        return proc.returncode, True
-    except OSError:
-        return 127, True
 
 
 # ─────────────────────────────────────────────

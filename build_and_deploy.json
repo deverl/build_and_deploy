@@ -22,7 +22,8 @@
             {
                 "text": "Make",
                 "command": "./make.sh current",
-                "help": "Runs ./make.sh current"
+                "help": "Runs ./make.sh current",
+                "input": "y\n"
             },
             {
                 "text": "git diff",
@@ -104,7 +105,8 @@
             {
                 "text": "Make",
                 "command": "cd jaguar ; ./make.sh current",
-                "help": "Runs cd jaguar ; ./make.sh current"
+                "help": "Runs cd jaguar ; ./make.sh current",
+                "input": "y\n"
             },
             {
                 "text": "Promote to rc",
