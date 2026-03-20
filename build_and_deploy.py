@@ -7,7 +7,10 @@ Each step is defined as a dict with optional keys:
   text         - display label (also used as command if no 'command' key)
   command      - shell command to run
   help         - informational note shown in the menu and before running
-  input        - string to feed as stdin to the command (e.g. "n\n")
+  input        - optional string written to a temp file; the command text is
+                 suffixed with `` < /path/to/file`` (path shell-quoted), then run.
+                 Use embedded newlines for multiple prompts (e.g. ``"y\\n"``). If
+                 omitted, the command inherits this process's stdin/stdout/stderr.
   auto_advance - if true, on success automatically run the next step
   on_error     - array of shell commands to run synchronously when the step fails
 
@@ -15,17 +18,15 @@ Steps with only a 'help' key are display-only (no-op on Enter).
 """
 
 import argparse
-import fcntl
 import json
 import os
-import pty
-import select
+import shlex
 import shutil
-import signal
+import subprocess
 import sys
+import tempfile
 import termios
 import tty
-import time
 
 # ─────────────────────────────────────────────
 # Terminal helpers
@@ -132,7 +133,7 @@ def run_command(
     suppress_command_header: bool = False,
 ) -> int:
     """
-    Run the command for a step, streaming output live.
+    Run the command for a step. Child stdout/stderr go to this process's terminal.
     Returns the exit code.
     """
     text = step.get("text", "")
@@ -143,20 +144,36 @@ def run_command(
     if help_:
         print(f"\n{YELLOW}ℹ  {help_}{RESET}\n")
 
-    if not suppress_command_header:
-        print(f"{BOLD}>>> {command}{RESET}")
-    if not suppress_pre_separator:
-        print("─" * min(TERM_WIDTH, 72))
+    exit_code = 1
+    stdout_needs_newline = True
+    path: str | None = None
+    try:
+        if stdin_ is not None:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                delete=False,
+                prefix="build_and_deploy_",
+                suffix=".stdin",
+            ) as tmp:
+                tmp.write(stdin_)
+                path = tmp.name
+            cmd_to_run = f"{command} < {shlex.quote(path)}"
+        else:
+            cmd_to_run = command
 
-    if stdin_ is not None:
-        # Feed preset input, but run under a PTY so interactive scripts
-        # behave consistently across macOS/Linux.
-        exit_code, stdout_needs_newline = _run_with_pty(
-            command, stdin_bytes=stdin_.encode()
-        )
-    else:
-        # Stream output live via a PTY so programs that check isatty() behave normally
-        exit_code, stdout_needs_newline = _run_with_pty(command)
+        if not suppress_command_header:
+            print(f"{BOLD}>>> {cmd_to_run}{RESET}")
+        if not suppress_pre_separator:
+            print("─" * min(TERM_WIDTH, 72))
+
+        exit_code, stdout_needs_newline = _run_inherit_stdio(cmd_to_run)
+    finally:
+        if path is not None:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
 
     if not suppress_post_separator:
         # If the child's last output didn't end with \n (common for prompts), the
@@ -167,152 +184,20 @@ def run_command(
     return exit_code
 
 
-def _run_with_pty(command: str, *, stdin_bytes: bytes | None = None) -> tuple[int, bool]:
-    """Run command in a PTY so interactive output/input works correctly.
-
-    Uses pty.fork() rather than openpty()+manual controlling-tty setup because
-    some programs read from /dev/tty on Linux, and pty.fork() makes that work
-    reliably.
-
-    Returns (exit_code, stdout_needs_newline): the latter is True when the
-    last byte copied to stdout was not a newline, so the next print should
-    start with a newline to avoid drawing on the same line as a prompt.
-    """
-    pid, master_fd = pty.fork()
-
-    if pid == 0:
-        # Child process: exec the requested shell command.
-        try:
-            # Ensure the PTY slave becomes the controlling terminal for this
-            # process. Some interactive programs read from /dev/tty and can
-            # behave differently in SSH sessions if controlling tty isn't set.
-            try:
-                os.setsid()
-            except OSError:
-                pass
-            try:
-                ticsctty = getattr(termios, "TIOCSCTTY", None)
-                if ticsctty is not None:
-                    fcntl.ioctl(0, ticsctty, 0)  # fd 0 should be the PTY slave
-            except Exception:
-                pass
-            os.execvp("bash", ["bash", "-c", command])
-        except Exception:
-            os._exit(127)
-
-    old_sigint_handler = signal.getsignal(signal.SIGINT)
-
-    def _forward_sigint(signum, frame) -> None:
-        """Forward CTRL+C (SIGINT) to the child process group when possible."""
-        try:
-            pgid = os.getpgid(pid)
-            os.killpg(pgid, signal.SIGINT)
-        except Exception:
-            try:
-                os.kill(pid, signal.SIGINT)
-            except Exception:
-                pass
-
+def _run_inherit_stdio(command: str) -> tuple[int, bool]:
+    """Run ``bash -c command`` with stdin/stdout/stderr inherited from this process."""
+    sys.stdout.flush()
+    sys.stderr.flush()
     try:
-        signal.signal(signal.SIGINT, _forward_sigint)
-        input_injected = False
-        inject_deadline = (time.monotonic() + 1.0) if stdin_bytes else None
-        last_status: int | None = None
-        last_stdout_byte: int | None = None
-
-        def _write_stdout(data: bytes) -> None:
-            nonlocal last_stdout_byte
-            try:
-                os.write(sys.stdout.fileno(), data)
-            except OSError:
-                pass
-            else:
-                if data:
-                    last_stdout_byte = data[-1]
-
-        while True:
-            try:
-                rlist, _, _ = select.select([master_fd], [], [], 0.1)
-            except (ValueError, OSError):
-                break
-
-            if rlist:
-                try:
-                    data = os.read(master_fd, 4096)
-                except OSError:
-                    break
-                if data:
-                    _write_stdout(data)
-
-                    # Inject scripted input after we see the first prompt/output.
-                    if stdin_bytes and not input_injected:
-                        try:
-                            os.write(master_fd, stdin_bytes)
-                        except OSError:
-                            pass
-                        input_injected = True
-
-            # Fallback: inject even if the child hasn't emitted output yet.
-            if (
-                stdin_bytes
-                and not input_injected
-                and inject_deadline is not None
-                and time.monotonic() >= inject_deadline
-            ):
-                try:
-                    os.write(master_fd, stdin_bytes)
-                except OSError:
-                    pass
-                input_injected = True
-
-            # Check for child exit without blocking.
-            try:
-                wpid, status = os.waitpid(pid, os.WNOHANG)
-            except ChildProcessError:
-                wpid = pid
-                status = last_status if last_status is not None else 1
-
-            if wpid == pid:
-                last_status = status
-                # Drain any remaining output.
-                while True:
-                    try:
-                        rlist, _, _ = select.select([master_fd], [], [], 0)
-                    except (ValueError, OSError):
-                        break
-                    if not rlist:
-                        break
-                    try:
-                        data = os.read(master_fd, 4096)
-                    except OSError:
-                        break
-                    if not data:
-                        break
-                    _write_stdout(data)
-                break
-
-        if last_status is None:
-            _pid, last_status = os.waitpid(pid, 0)
-
-        # Convert waitpid status to an exit code.
-        if os.WIFEXITED(last_status):
-            code = os.WEXITSTATUS(last_status)
-        elif os.WIFSIGNALED(last_status):
-            code = 128 + os.WTERMSIG(last_status)
-        else:
-            code = 1
-
-        needs_newline = last_stdout_byte is not None and last_stdout_byte != ord("\n")
-        return code, needs_newline
-    finally:
-        try:
-            signal.signal(signal.SIGINT, old_sigint_handler)
-        except Exception:
-            pass
-        try:
-            os.close(master_fd)
-        except OSError:
-            pass
+        proc = subprocess.run(
+            ["bash", "-c", command],
+            stdin=None,
+            stdout=None,
+            stderr=None,
+        )
+        return proc.returncode, True
+    except OSError:
+        return 127, True
 
 
 # ─────────────────────────────────────────────
