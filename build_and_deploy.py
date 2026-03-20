@@ -15,30 +15,31 @@ Steps with only a 'help' key are display-only (no-op on Enter).
 """
 
 import argparse
+import fcntl
 import json
 import os
 import pty
 import select
 import shutil
 import signal
-import subprocess
 import sys
 import termios
 import tty
+import time
 
 # ─────────────────────────────────────────────
 # Terminal helpers
 # ─────────────────────────────────────────────
 
 # ANSI codes
-RESET      = "\033[0m"
-REVERSE    = "\033[7m"       # highlighted row
-DIM        = "\033[2m"
-BOLD       = "\033[1m"
-YELLOW     = "\033[33m"
-GREEN      = "\033[32m"
-RED        = "\033[31m"
-CYAN       = "\033[36m"
+RESET = "\033[0m"
+REVERSE = "\033[7m"  # highlighted row
+DIM = "\033[2m"
+BOLD = "\033[1m"
+YELLOW = "\033[33m"
+GREEN = "\033[32m"
+RED = "\033[31m"
+CYAN = "\033[36m"
 
 TERM_WIDTH = shutil.get_terminal_size((80, 24)).columns
 
@@ -71,6 +72,7 @@ def read_key() -> str:
 # Menu rendering
 # ─────────────────────────────────────────────
 
+
 def _step_display_text(step: dict) -> str:
     """Return the label text shown in the menu for a step."""
     return step.get("text", "")
@@ -92,10 +94,10 @@ def draw_menu(steps: list, selected: int, mode_label: str) -> None:
     print()
 
     for i, step in enumerate(steps):
-        label   = _step_display_text(step)
-        help_   = _step_help_text(step)
+        label = _step_display_text(step)
+        help_ = _step_help_text(step)
         is_noop = _is_noop(step)
-        is_sel  = (i == selected)
+        is_sel = i == selected
 
         if is_noop:
             # Comment/notice line – always dimmed, never selectable
@@ -105,7 +107,7 @@ def draw_menu(steps: list, selected: int, mode_label: str) -> None:
 
         # Build display row
         row_label = f"  {label}"
-        suffix    = f"  {DIM}({help_}){RESET}" if help_ else ""
+        suffix = f"  {DIM}({help_}){RESET}" if help_ else ""
 
         if is_sel:
             # Pad to terminal width so the highlight bar stretches across
@@ -121,6 +123,7 @@ def draw_menu(steps: list, selected: int, mode_label: str) -> None:
 # Command execution
 # ─────────────────────────────────────────────
 
+
 def run_command(
     step: dict,
     *,
@@ -132,10 +135,10 @@ def run_command(
     Run the command for a step, streaming output live.
     Returns the exit code.
     """
-    text    = step.get("text", "")
+    text = step.get("text", "")
     command = step.get("command", text)
-    stdin_  = step.get("input")       # optional string fed to stdin
-    help_   = step.get("help", "")
+    stdin_ = step.get("input")  # optional string fed to stdin
+    help_ = step.get("help", "")
 
     if help_:
         print(f"\n{YELLOW}ℹ  {help_}{RESET}\n")
@@ -146,14 +149,9 @@ def run_command(
         print("─" * min(TERM_WIDTH, 72))
 
     if stdin_ is not None:
-        # Feed preset input; use PIPE for stdin
-        result = subprocess.run(
-            command,
-            shell=True,
-            executable="/bin/bash",
-            input=stdin_.encode(),
-        )
-        exit_code = result.returncode
+        # Feed preset input, but run under a PTY so interactive scripts
+        # behave consistently across macOS/Linux.
+        exit_code = _run_with_pty(command, stdin_bytes=stdin_.encode())
     else:
         # Stream output live via a PTY so programs that check isatty() behave normally
         exit_code = _run_with_pty(command)
@@ -163,37 +161,54 @@ def run_command(
     return exit_code
 
 
-def _run_with_pty(command: str) -> int:
-    """Run command in a pseudo-terminal so interactive output works correctly."""
-    master_fd, slave_fd = pty.openpty()
+def _run_with_pty(command: str, *, stdin_bytes: bytes | None = None) -> int:
+    """Run command in a PTY so interactive output/input works correctly.
 
-    proc = subprocess.Popen(
-        ["bash", "-c", command],
-        stdin=slave_fd,
-        stdout=slave_fd,
-        stderr=slave_fd,
-        start_new_session=True,
-        close_fds=True,
-    )
+    Uses pty.fork() rather than openpty()+manual controlling-tty setup because
+    some programs read from /dev/tty on Linux, and pty.fork() makes that work
+    reliably.
+    """
+    pid, master_fd = pty.fork()
 
-    # Parent: relay output from child PTY to stdout
-    os.close(slave_fd)
+    if pid == 0:
+        # Child process: exec the requested shell command.
+        try:
+            # Ensure the PTY slave becomes the controlling terminal for this
+            # process. Some interactive programs read from /dev/tty and can
+            # behave differently in SSH sessions if controlling tty isn't set.
+            try:
+                os.setsid()
+            except OSError:
+                pass
+            try:
+                ticsctty = getattr(termios, "TIOCSCTTY", None)
+                if ticsctty is not None:
+                    fcntl.ioctl(0, ticsctty, 0)  # fd 0 should be the PTY slave
+            except Exception:
+                pass
+            os.execvp("bash", ["bash", "-c", command])
+        except Exception:
+            os._exit(127)
+
     old_sigint_handler = signal.getsignal(signal.SIGINT)
 
     def _forward_sigint(signum, frame) -> None:
-        """Forward CTRL+C (SIGINT) only to the child process group."""
+        """Forward CTRL+C (SIGINT) to the child process group when possible."""
         try:
-            # start_new_session=True makes the child's session leader also its process group.
-            os.killpg(proc.pid, signal.SIGINT)
+            pgid = os.getpgid(pid)
+            os.killpg(pgid, signal.SIGINT)
         except Exception:
-            # Fall back to sending to just the immediate process.
             try:
-                proc.send_signal(signal.SIGINT)
+                os.kill(pid, signal.SIGINT)
             except Exception:
                 pass
 
     try:
         signal.signal(signal.SIGINT, _forward_sigint)
+        input_injected = False
+        inject_deadline = (time.monotonic() + 1.0) if stdin_bytes else None
+        last_status: int | None = None
+
         while True:
             try:
                 rlist, _, _ = select.select([master_fd], [], [], 0.1)
@@ -205,13 +220,43 @@ def _run_with_pty(command: str) -> int:
                     data = os.read(master_fd, 4096)
                 except OSError:
                     break
-                if not data:
-                    break
-                sys.stdout.buffer.write(data)
-                sys.stdout.buffer.flush()
+                if data:
+                    try:
+                        os.write(sys.stdout.fileno(), data)
+                    except OSError:
+                        pass
 
-            if proc.poll() is not None:
-                # Drain any remaining output without waiting too long.
+                    # Inject scripted input after we see the first prompt/output.
+                    if stdin_bytes and not input_injected:
+                        try:
+                            os.write(master_fd, stdin_bytes)
+                        except OSError:
+                            pass
+                        input_injected = True
+
+            # Fallback: inject even if the child hasn't emitted output yet.
+            if (
+                stdin_bytes
+                and not input_injected
+                and inject_deadline is not None
+                and time.monotonic() >= inject_deadline
+            ):
+                try:
+                    os.write(master_fd, stdin_bytes)
+                except OSError:
+                    pass
+                input_injected = True
+
+            # Check for child exit without blocking.
+            try:
+                wpid, status = os.waitpid(pid, os.WNOHANG)
+            except ChildProcessError:
+                wpid = pid
+                status = last_status if last_status is not None else 1
+
+            if wpid == pid:
+                last_status = status
+                # Drain any remaining output.
                 while True:
                     try:
                         rlist, _, _ = select.select([master_fd], [], [], 0)
@@ -225,11 +270,22 @@ def _run_with_pty(command: str) -> int:
                         break
                     if not data:
                         break
-                    sys.stdout.buffer.write(data)
-                    sys.stdout.buffer.flush()
+                    try:
+                        os.write(sys.stdout.fileno(), data)
+                    except OSError:
+                        pass
                 break
+
+        if last_status is None:
+            _pid, last_status = os.waitpid(pid, 0)
+
+        # Convert waitpid status to an exit code.
+        if os.WIFEXITED(last_status):
+            return os.WEXITSTATUS(last_status)
+        if os.WIFSIGNALED(last_status):
+            return 128 + os.WTERMSIG(last_status)
+        return 1
     finally:
-        # Restore the parent handler so CTRL+C behaves normally after the step ends.
         try:
             signal.signal(signal.SIGINT, old_sigint_handler)
         except Exception:
@@ -239,12 +295,11 @@ def _run_with_pty(command: str) -> int:
         except OSError:
             pass
 
-    return proc.wait()
-
 
 # ─────────────────────────────────────────────
 # Main loop
 # ─────────────────────────────────────────────
+
 
 def next_runnable(steps: list, current: int) -> int:
     """Return the index of the next step that isn't a noop, wrapping if needed."""
@@ -267,7 +322,7 @@ def run_menu(steps: list, mode_label: str) -> None:
         key = read_key()
 
         # Navigation
-        if key in ("\x1b[A", "\x1b[D", "k", "K"):   # Up / Left (vi: k)
+        if key in ("\x1b[A", "\x1b[D", "k", "K"):  # Up / Left (vi: k)
             new = selected - 1
             while new >= 0 and _is_noop(steps[new]):
                 new -= 1
@@ -289,11 +344,11 @@ def run_menu(steps: list, mode_label: str) -> None:
                     new += 1
             selected = new
 
-        elif key in ("q", "Q", "\x03"):    # q / Ctrl-C
+        elif key in ("q", "Q", "\x03"):  # q / Ctrl-C
             clear()
             sys.exit(0)
 
-        elif key in ("\r", "\n", ""):       # Enter
+        elif key in ("\r", "\n", ""):  # Enter
             step = steps[selected]
 
             if _is_noop(step):
@@ -324,22 +379,28 @@ def run_menu(steps: list, mode_label: str) -> None:
                                     suppress_command_header=True,
                                 )
                         print()
-                    print(f"\n{RED}⚠  Step exited with code {exit_code}.{RESET}  "
-                          "Press any key to return to menu…")
+                    print(
+                        f"\n{RED}⚠  Step exited with code {exit_code}.{RESET}  "
+                        "Press any key to return to menu…"
+                    )
                     read_key()
                     break
 
                 advanced = next_runnable(steps, selected)
                 if advanced == selected:
-                    print(f"\n{GREEN}✓  Step complete.{RESET}  "
-                          "Press any key to continue to the next step…")
+                    print(
+                        f"\n{GREEN}✓  Step complete.{RESET}  "
+                        "Press any key to continue to the next step…"
+                    )
                     read_key()
                     break
 
                 selected = advanced  # Always select next item on success
                 if not step.get("auto_advance"):
-                    print(f"\n{GREEN}✓  Step complete.{RESET}  "
-                          "Press any key to continue to the next step…")
+                    print(
+                        f"\n{GREEN}✓  Step complete.{RESET}  "
+                        "Press any key to continue to the next step…"
+                    )
                     read_key()
                     break
 
@@ -354,11 +415,12 @@ def run_menu(steps: list, mode_label: str) -> None:
 # Entry point
 # ─────────────────────────────────────────────
 
-def load_steps(json_file: str | None = None) -> tuple:
+
+def load_config(json_file: str | None = None) -> tuple:
     """
-    Load step lists from build_and_deploy.json in the same directory
+    Load config from build_and_deploy.json in the same directory
     as this script. Exits with code 1 if the file is missing or invalid.
-    Returns (vanguard_dir, steps_full, steps_backend).
+    Returns config.
     """
     if json_file:
         json_path = os.path.abspath(os.path.expanduser(json_file))
@@ -372,34 +434,11 @@ def load_steps(json_file: str | None = None) -> tuple:
         sys.exit(1)
     try:
         with open(json_path) as f:
-            data = json.load(f)
+            config = json.load(f)
+            return config
     except (json.JSONDecodeError, OSError) as e:
         print(f"ERROR: Could not read {json_path}: {e}", file=sys.stderr)
         sys.exit(1)
-    steps_data = data.get("steps")
-    if not steps_data or not isinstance(steps_data, dict):
-        print(f"ERROR: {json_path} must contain a \"steps\" object.", file=sys.stderr)
-        sys.exit(1)
-
-    dirs = data.get("dirs")
-    if not dirs or not isinstance(dirs, dict):
-        print(f'ERROR: {json_path} must contain a "dirs" object.', file=sys.stderr)
-        sys.exit(1)
-    vanguard_dir = dirs.get("vanguard")
-    if not vanguard_dir or not isinstance(vanguard_dir, str):
-        print(f'ERROR: {json_path} "dirs" must contain a "vanguard" string.',
-              file=sys.stderr)
-        sys.exit(1)
-
-    full = steps_data.get("full")
-    backend = steps_data.get("backend")
-    if not full or not backend:
-        print(f"ERROR: {json_path} \"steps\" must contain \"full\" and \"backend\" arrays.",
-              file=sys.stderr)
-        sys.exit(1)
-    _ensure_quit_step(full)
-    _ensure_quit_step(backend)
-    return vanguard_dir, full, backend
 
 
 def _ensure_quit_step(steps: list) -> None:
@@ -415,40 +454,57 @@ def _ensure_quit_step(steps: list) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Interactive build-and-deploy menu."
-    )
+    parser = argparse.ArgumentParser(description="Interactive build-and-deploy menu.")
     parser.add_argument(
-        "-b", "--backend-only",
+        "-b",
+        "--backend-only",
         action="store_true",
         help="Use backend-only step list",
     )
     parser.add_argument(
-        "-s", "--skip_directory_check",
+        "-s",
+        "--skip_directory_check",
         action="store_true",
         help="Skip check that the script is run from the expected directory",
     )
     parser.add_argument(
-        "-f", "--json_file",
+        "-f",
+        "--json_file",
         default=None,
         help="Path to a JSON file containing step definitions (overrides build_and_deploy.json)",
     )
     args = parser.parse_args()
 
-    vanguard_dir, steps_full, steps_backend = load_steps(args.json_file)
+    config = load_config(args.json_file)
+
+    vanguard_dir = config.get("dirs", {}).get("vanguard", "/root/vanguard")
+
+    build_type: str = None
+
+    if args.backend_only:
+        steps = config.get("steps", {}).get("backend")
+        build_type = "BACKEND ONLY"
+    else:
+        steps = config.get("steps", {}).get("full")
+        build_type = "FULL DEPLOY"
+
+    if not steps:
+        print(f"ERROR: No steps found for {build_type}.")
+        sys.exit(1)
+
+    _ensure_quit_step(steps)
 
     if not args.skip_directory_check:
         # Compare resolved paths so symlinks don't trip the check.
         cwd_real = os.path.realpath(os.getcwd())
         vanguard_real = os.path.realpath(vanguard_dir)
         if cwd_real != vanguard_real:
-            print(f"ERROR: You must be in the {vanguard_real} directory to use this script.")
+            print(
+                f"ERROR: You must be in the {vanguard_real} directory to use this script."
+            )
             sys.exit(1)
 
-    if args.backend_only:
-        run_menu(steps_backend, "BACKEND ONLY")
-    else:
-        run_menu(steps_full, "FULL DEPLOY")
+    run_menu(steps, build_type)
 
 
 if __name__ == "__main__":
