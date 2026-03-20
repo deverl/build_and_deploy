@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+
+cd ~/Projects/build_and_deploy
+
+rsync -av build_and_deploy.py build_and_deploy.json build-box:bin/
+
