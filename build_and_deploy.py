@@ -107,15 +107,15 @@ def draw_menu(steps: list, selected: int, mode_label: str) -> None:
             continue
 
         # Build display row
-        row_label = f"  {label}"
+        row_label = f" {label}"
         suffix = f"  {DIM}({help_}){RESET}" if help_ else ""
 
         if is_sel:
-            # Pad to terminal width so the highlight bar stretches across
-            print(f"{REVERSE}{row_label}{RESET}{suffix}", end="")
+            w = max(30, len(row_label))
+            print(f" {REVERSE}{row_label:{w}}{RESET}{suffix}", end="")
             print()
         else:
-            print(f"{row_label}{suffix}")
+            print(f" {row_label}{suffix}")
 
     print()
 
