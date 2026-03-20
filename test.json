@@ -1,7 +1,6 @@
 {
-    "dirs": {
-        "vanguard": "/root/vanguard",
-        "jaguar": "/root/vanguard/jaguar"
+    "settings": {
+        "build_directory": "/root/vanguard"
     },
     "steps": {
         "full": [

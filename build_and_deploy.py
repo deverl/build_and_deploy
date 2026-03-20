@@ -350,10 +350,17 @@ def main() -> None:
         help="Use backend-only step list",
     )
     parser.add_argument(
+        "-d",
+        "--directory",
+        default=None,
+        metavar="DIR",
+        help="Working directory for steps (overrides settings.build_directory in JSON)",
+    )
+    parser.add_argument(
         "-s",
         "--skip_directory_check",
         action="store_true",
-        help="Skip check that the script is run from the expected directory",
+        help="Do not change directory on startup (ignores -d and JSON build_directory)",
     )
     parser.add_argument(
         "-f",
@@ -365,9 +372,9 @@ def main() -> None:
 
     config = load_config(args.json_file)
 
-    vanguard_dir = config.get("dirs", {}).get("vanguard", "/root/vanguard")
+    settings = config.get("settings") or {}
 
-    build_type: str = None
+    build_type: str | None = None
 
     if args.backend_only:
         steps = config.get("steps", {}).get("backend")
@@ -383,14 +390,23 @@ def main() -> None:
     _ensure_quit_step(steps)
 
     if not args.skip_directory_check:
-        # Compare resolved paths so symlinks don't trip the check.
-        cwd_real = os.path.realpath(os.getcwd())
-        vanguard_real = os.path.realpath(vanguard_dir)
-        if cwd_real != vanguard_real:
+        from_cli = args.directory
+        from_json = settings.get("build_directory")
+        if from_cli is not None and str(from_cli).strip() != "":
+            build_dir = from_cli.strip()
+        elif from_json is not None and str(from_json).strip() != "":
+            build_dir = from_json.strip()
+        else:
             print(
-                f"ERROR: You must be in the {vanguard_real} directory to use this script."
+                "ERROR: Set settings.build_directory in the JSON file, or pass -d/--directory.",
+                file=sys.stderr,
             )
             sys.exit(1)
+        build_dir = os.path.expanduser(build_dir)
+        target = os.path.realpath(os.path.abspath(build_dir))
+        cwd_real = os.path.realpath(os.getcwd())
+        if cwd_real != target:
+            os.chdir(target)
 
     run_menu(steps, build_type)
 
