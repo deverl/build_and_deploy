@@ -414,6 +414,8 @@ def main() -> None:
 
     run_menu(steps, build_type)
 
+    clear()
+
 
 if __name__ == "__main__":
     main()
