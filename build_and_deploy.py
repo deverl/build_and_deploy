@@ -45,90 +45,46 @@ CYAN    = "\033[36m"
 TERM_WIDTH = shutil.get_terminal_size((80, 24)).columns
 
 
-def enter_alternate_screen() -> None:
-    """Use the terminal alternate buffer so the previous screen restores on exit."""
-    print("\033[?1049h", end="", flush=True)
+class Screen:
+    """Terminal screen buffer and clear helpers."""
+
+    @staticmethod
+    def enter_alternate() -> None:
+        """Use the terminal alternate buffer so the previous screen restores on exit."""
+        print("\033[?1049h", end="", flush=True)
+
+    @staticmethod
+    def leave_alternate() -> None:
+        """Return to the main screen buffer (undo enter_alternate)."""
+        print("\033[?1049l", end="", flush=True)
+
+    @staticmethod
+    def clear() -> None:
+        print("\033[2J\033[H", end="", flush=True)
 
 
-def leave_alternate_screen() -> None:
-    """Return to the main screen buffer (undo enter_alternate_screen)."""
-    print("\033[?1049l", end="", flush=True)
+class Keyboard:
+    """Raw stdin keypress reads (including escape sequences)."""
 
-
-def clear():
-    print("\033[2J\033[H", end="", flush=True)
-
-
-def read_key() -> str:
-    """Read a single keypress (including escape sequences) from stdin."""
-    fd = sys.stdin.fileno()
-    old = termios.tcgetattr(fd)
-    try:
-        tty.setraw(fd)
-        ch = os.read(fd, 1).decode("latin-1")
-        if ch == "\x1b":
-            # Read the next two bytes of the escape sequence directly.
-            # They arrive immediately after the escape byte, so no timeout needed.
-            try:
-                ch += os.read(fd, 1).decode("latin-1")
-                ch += os.read(fd, 1).decode("latin-1")
-            except OSError:
-                pass
-        return ch
-    finally:
-        termios.tcsetattr(fd, termios.TCSADRAIN, old)
-
-
-# ─────────────────────────────────────────────
-# Menu rendering
-# ─────────────────────────────────────────────
-
-
-def _step_display_text(step: dict) -> str:
-    """Return the label text shown in the menu for a step."""
-    return step.get("text", "")
-
-
-def _step_help_text(step: dict) -> str:
-    return step.get("help", "")
-
-
-def _is_noop(step: dict) -> bool:
-    """True for steps that are display/comment only (no text key)."""
-    return "text" not in step
-
-
-def draw_menu(steps: list, selected: int, mode_label: str, max_length: int) -> None:
-    clear()
-    header = f"[ {mode_label} ]  ↑/↓ or j/k to move, ENTER to run, q to quit"
-    print(f"{BOLD}{header}{RESET}")
-    print()
-
-    max_length += 2  # One leading and one trailing space
-
-    for i, step in enumerate(steps):
-        label = _step_display_text(step)
-        help_ = _step_help_text(step)
-        is_noop = _is_noop(step)
-        is_sel = i == selected
-
-        if is_noop:
-            # Comment/notice line – always dimmed, never selectable
-            note = f"  ─── {help_} ───"
-            print(f"{DIM}{YELLOW}{note}{RESET}")
-            continue
-
-        # Build display row
-        row_label = f" {label}"
-        suffix = f"  {DIM}({help_}){RESET}" if help_ else ""
-
-        if is_sel:
-            print(f" {REVERSE}{row_label:{max_length}}{RESET}{suffix}", end="")
-            print()
-        else:
-            print(f" {row_label}{suffix}")
-
-    print()
+    @staticmethod
+    def read_key() -> str:
+        """Read a single keypress (including escape sequences) from stdin."""
+        fd = sys.stdin.fileno()
+        old = termios.tcgetattr(fd)
+        try:
+            tty.setraw(fd)
+            ch = os.read(fd, 1).decode("latin-1")
+            if ch == "\x1b":
+                # Read the next two bytes of the escape sequence directly.
+                # They arrive immediately after the escape byte, so no timeout needed.
+                try:
+                    ch += os.read(fd, 1).decode("latin-1")
+                    ch += os.read(fd, 1).decode("latin-1")
+                except OSError:
+                    pass
+            return ch
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old)
 
 
 # ─────────────────────────────────────────────
@@ -136,177 +92,233 @@ def draw_menu(steps: list, selected: int, mode_label: str, max_length: int) -> N
 # ─────────────────────────────────────────────
 
 
-def run_command(
-    step: dict,
-    *,
-    suppress_pre_separator: bool = False,
-    suppress_post_separator: bool = False,
-    suppress_command_header: bool = False,
-) -> int:
-    """
-    Run the command for a step. Child stdout/stderr go to this process's terminal.
-    Returns the exit code.
-    """
-    text = step.get("text", "")
-    command = step.get("command", text)
-    stdin_ = step.get("input")  # optional string fed to stdin
-    help_ = step.get("help", "")
+class Command:
+    """Run shell steps; child stdout/stderr use this process's terminal."""
 
-    if help_:
-        print(f"\n{YELLOW}ℹ  {help_}{RESET}\n")
+    @staticmethod
+    def run(
+        step: dict,
+        *,
+        suppress_pre_separator: bool = False,
+        suppress_post_separator: bool = False,
+        suppress_command_header: bool = False,
+    ) -> int:
+        """
+        Run the command for a step.
+        Returns the exit code.
+        """
+        text = step.get("text", "")
+        command = step.get("command", text)
+        stdin_ = step.get("input")  # optional string fed to stdin
+        help_ = step.get("help", "")
 
-    exit_code = 1
-    stdout_needs_newline = True
-    if not suppress_command_header:
-        print(f"{BOLD}>>> {command}{RESET}")
-    if not suppress_pre_separator:
-        print("─" * min(TERM_WIDTH, 72))
+        if help_:
+            print(f"\n{YELLOW}ℹ  {help_}{RESET}\n")
 
-    # Run via subprocess: when `input` is set, feed stdin through a pipe; leave
-    # stdout/stderr inherited so the child writes directly to the terminal (no
-    # Python-side buffering of output).
-    if stdin_ is not None:
-        proc = subprocess.Popen(
-            command,
-            shell=True,
-            stdin=subprocess.PIPE,
-        )
-        proc.communicate(input=stdin_.encode("utf-8"))
-        exit_code = proc.returncode if proc.returncode is not None else 1
-    else:
-        exit_code = subprocess.call(command, shell=True)
+        exit_code = 1
+        stdout_needs_newline = True
+        if not suppress_command_header:
+            print(f"{BOLD}>>> {command}{RESET}")
+        if not suppress_pre_separator:
+            print("─" * min(TERM_WIDTH, 72))
 
-    if not suppress_post_separator:
-        # If the child's last output didn't end with \n (common for prompts), the
-        # cursor is still on that line — print a newline so the separator draws below.
-        if stdout_needs_newline:
-            sys.stdout.write("\n")
-        print("─" * min(TERM_WIDTH, 72))
-    return exit_code
+        # Run via subprocess: when `input` is set, feed stdin through a pipe; leave
+        # stdout/stderr inherited so the child writes directly to the terminal (no
+        # Python-side buffering of output).
+        if stdin_ is not None:
+            proc = subprocess.Popen(
+                command,
+                shell=True,
+                stdin=subprocess.PIPE,
+            )
+            proc.communicate(input=stdin_.encode("utf-8"))
+            exit_code = proc.returncode if proc.returncode is not None else 1
+        else:
+            exit_code = subprocess.call(command, shell=True)
+
+        if not suppress_post_separator:
+            # If the child's last output didn't end with \n (common for prompts), the
+            # cursor is still on that line — print a newline so the separator draws below.
+            if stdout_needs_newline:
+                sys.stdout.write("\n")
+            print("─" * min(TERM_WIDTH, 72))
+        return exit_code
 
 
 # ─────────────────────────────────────────────
-# Main loop
+# Menu
 # ─────────────────────────────────────────────
 
 
-def next_runnable(steps: list, current: int) -> int:
-    """Return the index of the next step that isn't a noop, wrapping if needed."""
-    n = len(steps)
-    idx = current + 1
-    while idx < n and _is_noop(steps[idx]):
-        idx += 1
-    return idx if idx < n else current
+class Menu:
+    """Interactive step menu: render, navigate, run steps."""
 
+    @staticmethod
+    def _step_display_text(step: dict) -> str:
+        """Return the label text shown in the menu for a step."""
+        return step.get("text", "")
 
-def run_menu(steps: list, mode_label: str) -> None:
-    enter_alternate_screen()
-    try:
-        selected = 0
+    @staticmethod
+    def _step_help_text(step: dict) -> str:
+        return step.get("help", "")
 
-        # Get the length of the longest step menu text.
-        max_length = max(len(_step_display_text(step)) for step in steps)
-        # Advance past any leading noop steps
-        while selected < len(steps) and _is_noop(steps[selected]):
-            selected += 1
+    @staticmethod
+    def _is_noop(step: dict) -> bool:
+        """True for steps that are display/comment only (no text key)."""
+        return "text" not in step
 
+    @staticmethod
+    def draw_menu(steps: list, selected: int, mode_label: str, max_length: int) -> None:
+        Screen.clear()
+        header = f"[ {mode_label} ]  ↑/↓ or j/k to move, ENTER to run, q to quit"
+        print(f"{BOLD}{header}{RESET}")
+        print()
+
+        max_length += 2  # One leading and one trailing space
+
+        for i, step in enumerate(steps):
+            label = Menu._step_display_text(step)
+            help_ = Menu._step_help_text(step)
+            is_noop = Menu._is_noop(step)
+            is_sel = i == selected
+
+            if is_noop:
+                # Comment/notice line – always dimmed, never selectable
+                note = f"  ─── {help_} ───"
+                print(f"{DIM}{YELLOW}{note}{RESET}")
+                continue
+
+            # Build display row
+            row_label = f" {label}"
+            suffix = f"  {DIM}({help_}){RESET}" if help_ else ""
+
+            if is_sel:
+                print(f" {REVERSE}{row_label:{max_length}}{RESET}{suffix}", end="")
+                print()
+            else:
+                print(f" {row_label}{suffix}")
+
+        print()
+
+    @staticmethod
+    def next_runnable(steps: list, current: int) -> int:
+        """Return the index of the next step that isn't a noop, wrapping if needed."""
+        n = len(steps)
+        idx = current + 1
+        while idx < n and Menu._is_noop(steps[idx]):
+            idx += 1
+        return idx if idx < n else current
+
+    @staticmethod
+    def _navigate_up(steps: list, selected: int) -> int:
+        new = selected - 1
+        while new >= 0 and Menu._is_noop(steps[new]):
+            new -= 1
+        if new < 0:
+            new = len(steps) - 1
+            while new > selected and Menu._is_noop(steps[new]):
+                new -= 1
+        return new
+
+    @staticmethod
+    def _navigate_down(steps: list, selected: int) -> int:
+        new = selected + 1
+        while new < len(steps) and Menu._is_noop(steps[new]):
+            new += 1
+        if new >= len(steps):
+            new = 0
+            while new < selected and Menu._is_noop(steps[new]):
+                new += 1
+        return new
+
+    @staticmethod
+    def _run_steps_until_menu_return(steps: list, selected: int) -> int:
+        """Run step(s) starting at selected; return selected index when returning to the menu."""
         while True:
-            draw_menu(steps, selected, mode_label, max_length)
+            step = steps[selected]
+            Screen.clear()
+            exit_code = Command.run(step)
 
-            key = read_key()
+            if exit_code != 0:
+                on_error = step.get("on_error")
+                if on_error and isinstance(on_error, list):
+                    print(f"\n{YELLOW}Running on_error commands…{RESET}\n")
+                    for cmd in on_error:
+                        if isinstance(cmd, str):
+                            Command.run(
+                                {"command": cmd},
+                                suppress_pre_separator=True,
+                                suppress_post_separator=True,
+                                suppress_command_header=True,
+                            )
+                    print()
+                print(
+                    f"\n{RED}⚠  Step exited with code {exit_code}.{RESET}  "
+                    "Press any key to return to menu…"
+                )
+                Keyboard.read_key()
+                return selected
 
-            # Navigation
-            if key in ("\x1b[A", "\x1b[D", "k", "K"):  # Up / Left (vi: k)
-                new = selected - 1
-                while new >= 0 and _is_noop(steps[new]):
-                    new -= 1
-                if new < 0:
-                    # Wrap: find the last selectable step
-                    new = len(steps) - 1
-                    while new > selected and _is_noop(steps[new]):
-                        new -= 1
-                selected = new
+            advanced = Menu.next_runnable(steps, selected)
+            if advanced == selected:
+                print(
+                    f"\n{GREEN}✓  Step complete.{RESET}  "
+                    "Press any key to continue to the next step…"
+                )
+                Keyboard.read_key()
+                return selected
 
-            elif key in ("\x1b[B", "\x1b[C", "j", "J"):  # Down / Right (vi: j)
-                new = selected + 1
-                while new < len(steps) and _is_noop(steps[new]):
-                    new += 1
-                if new >= len(steps):
-                    # Wrap: find the first selectable step
-                    new = 0
-                    while new < selected and _is_noop(steps[new]):
-                        new += 1
-                selected = new
+            selected = advanced
+            if not step.get("auto_advance"):
+                print(
+                    f"\n{GREEN}✓  Step complete.{RESET}  "
+                    "Press any key to continue to the next step…"
+                )
+                Keyboard.read_key()
+                return selected
 
-            elif key in ("q", "Q", "\x03"):  # q / Ctrl-C
+            next_step = steps[selected]
+            if next_step.get("text") == "-- quit --":
                 sys.exit(0)
 
-            elif key in ("\r", "\n", ""):  # Enter
-                step = steps[selected]
+    @staticmethod
+    def run_menu(steps: list, mode_label: str) -> None:
+        Screen.enter_alternate()
+        try:
+            selected = 0
 
-                if _is_noop(step):
-                    continue
+            max_length = max(len(Menu._step_display_text(step)) for step in steps)
+            while selected < len(steps) and Menu._is_noop(steps[selected]):
+                selected += 1
 
-                label = step.get("text", "")
+            while True:
+                Menu.draw_menu(steps, selected, mode_label, max_length)
 
-                if label == "-- quit --":
+                key = Keyboard.read_key()
+
+                if key in ("\x1b[A", "\x1b[D", "k", "K"):  # Up / Left (vi: k)
+                    selected = Menu._navigate_up(steps, selected)
+
+                elif key in ("\x1b[B", "\x1b[C", "j", "J"):  # Down / Right (vi: j)
+                    selected = Menu._navigate_down(steps, selected)
+
+                elif key in ("q", "Q", "\x03"):  # q / Ctrl-C
                     sys.exit(0)
 
-                # Run the step (and possibly more if auto_advance)
-                while True:
+                elif key in ("\r", "\n", ""):  # Enter
                     step = steps[selected]
-                    clear()
-                    exit_code = run_command(step)
 
-                    if exit_code != 0:
-                        on_error = step.get("on_error")
-                        if on_error and isinstance(on_error, list):
-                            print(f"\n{YELLOW}Running on_error commands…{RESET}\n")
-                            for cmd in on_error:
-                                if isinstance(cmd, str):
-                                    run_command(
-                                        {"command": cmd},
-                                        suppress_pre_separator=True,
-                                        suppress_post_separator=True,
-                                        suppress_command_header=True,
-                                    )
-                            print()
-                        print(
-                            f"\n{RED}⚠  Step exited with code {exit_code}.{RESET}  "
-                            "Press any key to return to menu…"
-                        )
-                        read_key()
-                        break
+                    if Menu._is_noop(step):
+                        continue
 
-                    advanced = next_runnable(steps, selected)
-                    if advanced == selected:
-                        print(
-                            f"\n{GREEN}✓  Step complete.{RESET}  "
-                            "Press any key to continue to the next step…"
-                        )
-                        read_key()
-                        break
+                    label = step.get("text", "")
 
-                    selected = advanced  # Always select next item on success
-                    if not step.get("auto_advance"):
-                        print(
-                            f"\n{GREEN}✓  Step complete.{RESET}  "
-                            "Press any key to continue to the next step…"
-                        )
-                        read_key()
-                        break
-
-                    next_step = steps[selected]
-                    if next_step.get("text") == "-- quit --":
+                    if label == "-- quit --":
                         sys.exit(0)
-                    # Loop to run the next step
-    finally:
-        leave_alternate_screen()
 
-
-# ─────────────────────────────────────────────
-# Entry point
-# ─────────────────────────────────────────────
+                    selected = Menu._run_steps_until_menu_return(steps, selected)
+        finally:
+            Screen.leave_alternate()
 
 
 def load_config(json_file: str | None = None) -> tuple:
@@ -344,6 +356,11 @@ def _ensure_quit_step(steps: list) -> None:
     if steps and isinstance(steps[-1], dict) and steps[-1].get("text") == "-- quit --":
         return
     steps.append({"text": "-- quit --"})
+
+
+# ─────────────────────────────────────────────
+# Entry point
+# ─────────────────────────────────────────────
 
 
 def main() -> None:
@@ -413,7 +430,7 @@ def main() -> None:
         if cwd_real != target:
             os.chdir(target)
 
-    run_menu(steps, build_type)
+    Menu.run_menu(steps, build_type)
 
 
 if __name__ == "__main__":
