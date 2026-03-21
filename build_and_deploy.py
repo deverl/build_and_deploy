@@ -45,6 +45,16 @@ CYAN    = "\033[36m"
 TERM_WIDTH = shutil.get_terminal_size((80, 24)).columns
 
 
+def enter_alternate_screen() -> None:
+    """Use the terminal alternate buffer so the previous screen restores on exit."""
+    print("\033[?1049h", end="", flush=True)
+
+
+def leave_alternate_screen() -> None:
+    """Return to the main screen buffer (undo enter_alternate_screen)."""
+    print("\033[?1049l", end="", flush=True)
+
+
 def clear():
     print("\033[2J\033[H", end="", flush=True)
 
@@ -190,107 +200,108 @@ def next_runnable(steps: list, current: int) -> int:
 
 
 def run_menu(steps: list, mode_label: str) -> None:
-    selected = 0
+    enter_alternate_screen()
+    try:
+        selected = 0
 
-    # Get the length of the longest step menu text.
-    max_length = max(len(_step_display_text(step)) for step in steps)
-    # Advance past any leading noop steps
-    while selected < len(steps) and _is_noop(steps[selected]):
-        selected += 1
+        # Get the length of the longest step menu text.
+        max_length = max(len(_step_display_text(step)) for step in steps)
+        # Advance past any leading noop steps
+        while selected < len(steps) and _is_noop(steps[selected]):
+            selected += 1
 
-    while True:
-        draw_menu(steps, selected, mode_label, max_length)
+        while True:
+            draw_menu(steps, selected, mode_label, max_length)
 
-        key = read_key()
+            key = read_key()
 
-        # Navigation
-        if key in ("\x1b[A", "\x1b[D", "k", "K"):  # Up / Left (vi: k)
-            new = selected - 1
-            while new >= 0 and _is_noop(steps[new]):
-                new -= 1
-            if new < 0:
-                # Wrap: find the last selectable step
-                new = len(steps) - 1
-                while new > selected and _is_noop(steps[new]):
+            # Navigation
+            if key in ("\x1b[A", "\x1b[D", "k", "K"):  # Up / Left (vi: k)
+                new = selected - 1
+                while new >= 0 and _is_noop(steps[new]):
                     new -= 1
-            selected = new
+                if new < 0:
+                    # Wrap: find the last selectable step
+                    new = len(steps) - 1
+                    while new > selected and _is_noop(steps[new]):
+                        new -= 1
+                selected = new
 
-        elif key in ("\x1b[B", "\x1b[C", "j", "J"):  # Down / Right (vi: j)
-            new = selected + 1
-            while new < len(steps) and _is_noop(steps[new]):
-                new += 1
-            if new >= len(steps):
-                # Wrap: find the first selectable step
-                new = 0
-                while new < selected and _is_noop(steps[new]):
+            elif key in ("\x1b[B", "\x1b[C", "j", "J"):  # Down / Right (vi: j)
+                new = selected + 1
+                while new < len(steps) and _is_noop(steps[new]):
                     new += 1
-            selected = new
+                if new >= len(steps):
+                    # Wrap: find the first selectable step
+                    new = 0
+                    while new < selected and _is_noop(steps[new]):
+                        new += 1
+                selected = new
 
-        elif key in ("q", "Q", "\x03"):  # q / Ctrl-C
-            clear()
-            sys.exit(0)
-
-        elif key in ("\r", "\n", ""):  # Enter
-            step = steps[selected]
-
-            if _is_noop(step):
-                continue
-
-            label = step.get("text", "")
-
-            if label == "-- quit --":
-                clear()
+            elif key in ("q", "Q", "\x03"):  # q / Ctrl-C
                 sys.exit(0)
 
-            # Run the step (and possibly more if auto_advance)
-            while True:
+            elif key in ("\r", "\n", ""):  # Enter
                 step = steps[selected]
-                clear()
-                exit_code = run_command(step)
 
-                if exit_code != 0:
-                    on_error = step.get("on_error")
-                    if on_error and isinstance(on_error, list):
-                        print(f"\n{YELLOW}Running on_error commands…{RESET}\n")
-                        for cmd in on_error:
-                            if isinstance(cmd, str):
-                                run_command(
-                                    {"command": cmd},
-                                    suppress_pre_separator=True,
-                                    suppress_post_separator=True,
-                                    suppress_command_header=True,
-                                )
-                        print()
-                    print(
-                        f"\n{RED}⚠  Step exited with code {exit_code}.{RESET}  "
-                        "Press any key to return to menu…"
-                    )
-                    read_key()
-                    break
+                if _is_noop(step):
+                    continue
 
-                advanced = next_runnable(steps, selected)
-                if advanced == selected:
-                    print(
-                        f"\n{GREEN}✓  Step complete.{RESET}  "
-                        "Press any key to continue to the next step…"
-                    )
-                    read_key()
-                    break
+                label = step.get("text", "")
 
-                selected = advanced  # Always select next item on success
-                if not step.get("auto_advance"):
-                    print(
-                        f"\n{GREEN}✓  Step complete.{RESET}  "
-                        "Press any key to continue to the next step…"
-                    )
-                    read_key()
-                    break
-
-                next_step = steps[selected]
-                if next_step.get("text") == "-- quit --":
-                    clear()
+                if label == "-- quit --":
                     sys.exit(0)
-                # Loop to run the next step
+
+                # Run the step (and possibly more if auto_advance)
+                while True:
+                    step = steps[selected]
+                    clear()
+                    exit_code = run_command(step)
+
+                    if exit_code != 0:
+                        on_error = step.get("on_error")
+                        if on_error and isinstance(on_error, list):
+                            print(f"\n{YELLOW}Running on_error commands…{RESET}\n")
+                            for cmd in on_error:
+                                if isinstance(cmd, str):
+                                    run_command(
+                                        {"command": cmd},
+                                        suppress_pre_separator=True,
+                                        suppress_post_separator=True,
+                                        suppress_command_header=True,
+                                    )
+                            print()
+                        print(
+                            f"\n{RED}⚠  Step exited with code {exit_code}.{RESET}  "
+                            "Press any key to return to menu…"
+                        )
+                        read_key()
+                        break
+
+                    advanced = next_runnable(steps, selected)
+                    if advanced == selected:
+                        print(
+                            f"\n{GREEN}✓  Step complete.{RESET}  "
+                            "Press any key to continue to the next step…"
+                        )
+                        read_key()
+                        break
+
+                    selected = advanced  # Always select next item on success
+                    if not step.get("auto_advance"):
+                        print(
+                            f"\n{GREEN}✓  Step complete.{RESET}  "
+                            "Press any key to continue to the next step…"
+                        )
+                        read_key()
+                        break
+
+                    next_step = steps[selected]
+                    if next_step.get("text") == "-- quit --":
+                        sys.exit(0)
+                    # Loop to run the next step
+    finally:
+        leave_alternate_screen()
 
 
 # ─────────────────────────────────────────────
@@ -403,8 +414,6 @@ def main() -> None:
             os.chdir(target)
 
     run_menu(steps, build_type)
-
-    clear()
 
 
 if __name__ == "__main__":
