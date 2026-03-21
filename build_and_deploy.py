@@ -7,10 +7,9 @@ Each step is defined as a dict with optional keys:
   text         - display label (also used as command if no 'command' key)
   command      - shell command to run
   help         - informational note shown in the menu and before running
-  input        - optional string written to a temp file; the command text is
-                 suffixed with `` < /path/to/file`` (path shell-quoted), then run.
-                 Use embedded newlines for multiple prompts (e.g. ``"y\\n"``). If
-                 omitted, the command inherits this process's stdin/stdout/stderr.
+  input        - optional string fed to the subprocess stdin (UTF-8). Use embedded
+                 newlines for multiple prompts (e.g. ``"y\\n"``). If omitted, the
+                 command inherits this process's stdin/stdout/stderr.
   auto_advance - if true, on success automatically run the next step
   on_error     - array of shell commands to run synchronously when the step fails
 
@@ -21,10 +20,9 @@ they are skipped by navigation and cannot be run.
 import argparse
 import json
 import os
-import shlex
 import shutil
+import subprocess
 import sys
-import tempfile
 import termios
 import tty
 
@@ -147,34 +145,24 @@ def run_command(
 
     exit_code = 1
     stdout_needs_newline = True
-    path: str | None = None
-    try:
-        if stdin_ is not None:
-            with tempfile.NamedTemporaryFile(
-                mode="w",
-                encoding="utf-8",
-                delete=False,
-                prefix="build_and_deploy_",
-                suffix=".stdin",
-            ) as tmp:
-                tmp.write(stdin_)
-                path = tmp.name
-            cmd_to_run = f"{command} < {shlex.quote(path)}"
-        else:
-            cmd_to_run = command
+    if not suppress_command_header:
+        print(f"{BOLD}>>> {command}{RESET}")
+    if not suppress_pre_separator:
+        print("─" * min(TERM_WIDTH, 72))
 
-        if not suppress_command_header:
-            print(f"{BOLD}>>> {command}{RESET}")
-        if not suppress_pre_separator:
-            print("─" * min(TERM_WIDTH, 72))
-
-        exit_code = os.system(cmd_to_run)
-    finally:
-        if path is not None:
-            try:
-                os.unlink(path)
-            except OSError:
-                pass
+    # Run via subprocess: when `input` is set, feed stdin through a pipe; leave
+    # stdout/stderr inherited so the child writes directly to the terminal (no
+    # Python-side buffering of output).
+    if stdin_ is not None:
+        proc = subprocess.Popen(
+            command,
+            shell=True,
+            stdin=subprocess.PIPE,
+        )
+        proc.communicate(input=stdin_.encode("utf-8"))
+        exit_code = proc.returncode if proc.returncode is not None else 1
+    else:
+        exit_code = subprocess.call(command, shell=True)
 
     if not suppress_post_separator:
         # If the child's last output didn't end with \n (common for prompts), the
