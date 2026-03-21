@@ -30,17 +30,21 @@ import tty
 # Terminal helpers
 # ─────────────────────────────────────────────
 
-# fmt: off
-# ANSI codes
-RESET   = "\033[0m"
-REVERSE = "\033[7m"  # highlighted row
-DIM     = "\033[2m"
-BOLD    = "\033[1m"
-YELLOW  = "\033[33m"
-GREEN   = "\033[32m"
-RED     = "\033[31m"
-CYAN    = "\033[36m"
-# fmt: on
+
+class Style:
+    """ANSI SGR escape codes for styled terminal output."""
+
+    # fmt: off
+    RESET   = "\033[0m"
+    REVERSE = "\033[7m"  # highlighted row
+    DIM     = "\033[2m"
+    BOLD    = "\033[1m"
+    YELLOW  = "\033[33m"
+    GREEN   = "\033[32m"
+    RED     = "\033[31m"
+    CYAN    = "\033[36m"
+    # fmt: on
+
 
 TERM_WIDTH = shutil.get_terminal_size((80, 24)).columns
 
@@ -113,12 +117,12 @@ class Command:
         help_ = step.get("help", "")
 
         if help_:
-            print(f"\n{YELLOW}ℹ  {help_}{RESET}\n")
+            print(f"\n{Style.YELLOW}ℹ  {help_}{Style.RESET}\n")
 
         exit_code = 1
         stdout_needs_newline = True
         if not suppress_command_header:
-            print(f"{BOLD}>>> {command}{RESET}")
+            print(f"{Style.BOLD}>>> {command}{Style.RESET}")
         if not suppress_pre_separator:
             print("─" * min(TERM_WIDTH, 72))
 
@@ -171,7 +175,7 @@ class Menu:
     def draw_menu(steps: list, selected: int, mode_label: str, max_length: int) -> None:
         Screen.clear()
         header = f"[ {mode_label} ]  ↑/↓ or j/k to move, ENTER to run, q to quit"
-        print(f"{BOLD}{header}{RESET}")
+        print(f"{Style.BOLD}{header}{Style.RESET}")
         print()
 
         max_length += 2  # One leading and one trailing space
@@ -185,15 +189,15 @@ class Menu:
             if is_noop:
                 # Comment/notice line – always dimmed, never selectable
                 note = f"  ─── {help_} ───"
-                print(f"{DIM}{YELLOW}{note}{RESET}")
+                print(f"{Style.DIM}{Style.YELLOW}{note}{Style.RESET}")
                 continue
 
             # Build display row
             row_label = f" {label}"
-            suffix = f"  {DIM}({help_}){RESET}" if help_ else ""
+            suffix = f"  {Style.DIM}({help_}){Style.RESET}" if help_ else ""
 
             if is_sel:
-                print(f" {REVERSE}{row_label:{max_length}}{RESET}{suffix}", end="")
+                print(f" {Style.REVERSE}{row_label:{max_length}}{Style.RESET}{suffix}", end="")
                 print()
             else:
                 print(f" {row_label}{suffix}")
@@ -242,7 +246,7 @@ class Menu:
             if exit_code != 0:
                 on_error = step.get("on_error")
                 if on_error and isinstance(on_error, list):
-                    print(f"\n{YELLOW}Running on_error commands…{RESET}\n")
+                    print(f"\n{Style.YELLOW}Running on_error commands…{Style.RESET}\n")
                     for cmd in on_error:
                         if isinstance(cmd, str):
                             Command.run(
@@ -253,7 +257,7 @@ class Menu:
                             )
                     print()
                 print(
-                    f"\n{RED}⚠  Step exited with code {exit_code}.{RESET}  "
+                    f"\n{Style.RED}⚠  Step exited with code {exit_code}.{Style.RESET}  "
                     "Press any key to return to menu…"
                 )
                 Keyboard.read_key()
@@ -262,7 +266,7 @@ class Menu:
             advanced = Menu.next_runnable(steps, selected)
             if advanced == selected:
                 print(
-                    f"\n{GREEN}✓  Step complete.{RESET}  "
+                    f"\n{Style.GREEN}✓  Step complete.{Style.RESET}  "
                     "Press any key to continue to the next step…"
                 )
                 Keyboard.read_key()
@@ -271,7 +275,7 @@ class Menu:
             selected = advanced
             if not step.get("auto_advance"):
                 print(
-                    f"\n{GREEN}✓  Step complete.{RESET}  "
+                    f"\n{Style.GREEN}✓  Step complete.{Style.RESET}  "
                     "Press any key to continue to the next step…"
                 )
                 Keyboard.read_key()
