@@ -88,11 +88,13 @@ def _is_noop(step: dict) -> bool:
     return "text" not in step
 
 
-def draw_menu(steps: list, selected: int, mode_label: str) -> None:
+def draw_menu(steps: list, selected: int, mode_label: str, max_length: int) -> None:
     clear()
     header = f"[ {mode_label} ]  ↑/↓ or j/k to move, ENTER to run, q to quit"
     print(f"{BOLD}{header}{RESET}")
     print()
+
+    max_length += 2  # One leading and one trailing space
 
     for i, step in enumerate(steps):
         label = _step_display_text(step)
@@ -111,8 +113,7 @@ def draw_menu(steps: list, selected: int, mode_label: str) -> None:
         suffix = f"  {DIM}({help_}){RESET}" if help_ else ""
 
         if is_sel:
-            w = max(30, len(row_label))
-            print(f" {REVERSE}{row_label:{w}}{RESET}{suffix}", end="")
+            print(f" {REVERSE}{row_label:{max_length}}{RESET}{suffix}", end="")
             print()
         else:
             print(f" {row_label}{suffix}")
@@ -200,12 +201,15 @@ def next_runnable(steps: list, current: int) -> int:
 
 def run_menu(steps: list, mode_label: str) -> None:
     selected = 0
+
+    # Get the length of the longest step menu text.
+    max_length = max(len(_step_display_text(step)) for step in steps)
     # Advance past any leading noop steps
     while selected < len(steps) and _is_noop(steps[selected]):
         selected += 1
 
     while True:
-        draw_menu(steps, selected, mode_label)
+        draw_menu(steps, selected, mode_label, max_length)
 
         key = read_key()
 
