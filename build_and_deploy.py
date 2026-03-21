@@ -30,15 +30,17 @@ import tty
 # Terminal helpers
 # ─────────────────────────────────────────────
 
+# fmt: off
 # ANSI codes
-RESET = "\033[0m"
+RESET   = "\033[0m"
 REVERSE = "\033[7m"  # highlighted row
-DIM = "\033[2m"
-BOLD = "\033[1m"
-YELLOW = "\033[33m"
-GREEN = "\033[32m"
-RED = "\033[31m"
-CYAN = "\033[36m"
+DIM     = "\033[2m"
+BOLD    = "\033[1m"
+YELLOW  = "\033[33m"
+GREEN   = "\033[32m"
+RED     = "\033[31m"
+CYAN    = "\033[36m"
+# fmt: on
 
 TERM_WIDTH = shutil.get_terminal_size((80, 24)).columns
 
