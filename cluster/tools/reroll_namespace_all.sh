@@ -2,7 +2,8 @@
 
 for i in {1..3}
 do
-    l="$i : $(base64 /dev/urandom | head -c 60)"
+    r=$(base64 /dev/urandom 2> /dev/null | head -c 60)
+    l="$i: $r"
     echo "$l"
     sleep 1
 done
