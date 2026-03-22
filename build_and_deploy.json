@@ -9,7 +9,7 @@
             },
             {
                 "text": "Get build merges",
-                "command": "jaguar/tools/cicd/get_build_merges.sh -v | tee /tmp/changes.txt"
+                "command": "jaguar/tools/cicd/get_build_merges.sh -v > /tmp/changes.txt ; awk '/\\^{52}/{found=1; next} found && /^-{36}$/{exit} found' /tmp/changes.txt"
             },
             {
                 "text": "git status (fail if changes)",
