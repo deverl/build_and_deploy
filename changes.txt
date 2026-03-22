@@ -1,0 +1,31 @@
+verbosity level is 1
+Merges and BUILD tags since 1 builds ago:
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[MERGE]: 6ef175172 Wed Mar 18 09:23:17 2026 -0600 Merge branch 'feat/jcheney/multitenant-signup-fixtures' into 'main' (commit: 6ef175172)
+Merge branch 'feat/jcheney/multitenant-signup-fixtures' into 'main'
+Update settings file path in `DefaultSettingsLoader`
+See merge request bidboxpro/vanguard!1936
+~~~
+[MERGE]: 56f6d49c9 Tue Mar 17 23:18:36 2026 +0000 Merge branch 'feat/dstokes/bump-node-version-in-product-dash' into 'main' (commit: 56f6d49c9)
+Merge branch 'feat/dstokes/bump-node-version-in-product-dash' into 'main'
+Bumped the node version in product_dash
+See merge request bidboxpro/vanguard!1935
+~~~
+------------------------------------
+[BUILD TAG]: cdbcb2438 Fri Mar 20 13:22:01 2026 -0600 tag: BUILD/timestamp-20260320T194938/cdbcb243 (commit: cdbcb2438)
+------------------------------------
+[MERGE]: cdbcb2438 Fri Mar 20 13:22:01 2026 -0600 Merge branch 'feat/jcheney/WARH-3577/bulk-search-ids' into 'main' (commit: cdbcb2438)
+Merge branch 'feat/jcheney/WARH-3577/bulk-search-ids' into 'main'
+WARH-3577 - Feat/jcheney/warh 3577/bulk search ids
+See merge request bidboxpro/vanguard!1959
+~~~
+[MERGE]: c7c86a3e2 Fri Mar 20 13:00:41 2026 -0600 Merge branch 'feat/lshort/WARH-3535/admin-vs-account-admin-access' into 'main' (commit: c7c86a3e2)
+Merge branch 'feat/lshort/WARH-3535/admin-vs-account-admin-access' into 'main'
+Restrict non-admins from editing account admin details
+See merge request bidboxpro/vanguard!1919
+~~~
+[MERGE]: 3df8093fc Fri Mar 20 11:57:56 2026 -0600 Merge branch 'bugs/dmitten/WARH-3569/lexington-upload-customer-name-fix' into 'main' (commit: 3df8093fc)
+Merge branch 'bugs/dmitten/WARH-3569/lexington-upload-customer-name-fix' into 'main'
+WARH-3569: Remove redundant FORCE_FOREGROUND_FILE_PROCESSORS setting
+See merge request bidboxpro/vanguard!1947
+~~~

@@ -17,6 +17,10 @@
                 ]
             },
             {
+                "text": "test awk",
+                "command": "awk '/\\^{52}/{found=1; next} found && /^-{36}$/{exit} found' changes.txt"
+            },
+            {
                 "text": "Get build merges",
                 "command": "jaguar/tools/cicd/get_build_merges.sh -v | tee /tmp/changes.txt"
             },
