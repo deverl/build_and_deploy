@@ -12,11 +12,9 @@ Each step is defined as a dict with optional keys:
                  command inherits this process's stdin/stdout/stderr.
   auto_advance - if true, on success automatically run the next step
   on_error     - array of shell commands to run synchronously when the step fails
-  comment      - optional comments to describe the step. Any key that starts with 'comment'
-                 is ignored; use those for documentation in the JSON only.
 
-Any other key whose name starts with ``comment`` (e.g. ``comment``, ``comment_note``)
-is ignored; use those for documentation in the JSON only.
+Any other key whose name starts with ``comment`` (e.g. ``comment``, ``comment_note``,
+``comment1``, ``comment2``, etc.) is ignored; use those for documentation in the JSON only.
 
 Placeholders ``{{NAME}}`` in text, command, help, and input are replaced using
 the module-level ``variable_definitions`` map (e.g. {{PID}}, {{DATE}}, {{TIME}}).
