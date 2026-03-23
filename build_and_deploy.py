@@ -513,6 +513,7 @@ def main() -> None:
 
     global temporary_directory
     temporary_directory = _make_temp_directory(prefix=build_name, suffix=str(os.getpid()))
+
     _register_signal_handlers()
 
     try:
