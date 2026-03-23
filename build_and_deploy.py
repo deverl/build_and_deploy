@@ -523,7 +523,7 @@ def main() -> None:
         parser.print_help()
         sys.exit(0)
 
-    config_path = ['/usr/local/etc', '/tmp']
+    config_path = ['/usr/local/etc', '~/bin', '/tmp']
 
     config = load_config(config_path, args.json_file)
 
