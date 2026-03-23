@@ -12,6 +12,14 @@ Each step is defined as a dict with optional keys:
                  command inherits this process's stdin/stdout/stderr.
   auto_advance - if true, on success automatically run the next step
   on_error     - array of shell commands to run synchronously when the step fails
+  comment      - optional comments to describe the step. Any key that starts with 'comment'
+                 is ignored; use those for documentation in the JSON only.
+
+Any other key whose name starts with ``comment`` (e.g. ``comment``, ``comment_note``)
+is ignored; use those for documentation in the JSON only.
+
+Placeholders ``{{NAME}}`` in text, command, help, and input are replaced using
+the module-level ``variable_definitions`` map (e.g. {{PID}}, {{DATE}}, {{TIME}}).
 
 Steps without a 'text' key are display-only section lines (usually just 'help');
 they are skipped by navigation and cannot be run.
@@ -20,11 +28,33 @@ they are skipped by navigation and cannot be run.
 import argparse
 import json
 import os
+import re
 import shutil
+import signal
 import subprocess
 import sys
+import tempfile
 import termios
 import tty
+from collections.abc import Callable
+from datetime import datetime
+
+
+# The value to be used in {{TMPDIR}} substitutions (set in main() after mkdtemp).
+temporary_directory: str | None = None
+
+# Values may be literal strings or zero-argument callables returning a string (evaluated when used).
+VariableDefinitions = dict[str, str | Callable[[], str]]
+
+variable_definitions: VariableDefinitions = {
+    "PID": lambda: str(os.getpid()),
+    "DATE": lambda: datetime.now().strftime("%Y-%m-%d"),
+    "TIME": lambda: datetime.now().strftime("%H:%M:%S"),
+    "TMPDIR": lambda: temporary_directory if temporary_directory is not None else "/tmp",
+}
+
+_VAR_PATTERN = re.compile(r"\{\{([A-Za-z0-9_]+)\}\}")
+
 
 # ─────────────────────────────────────────────
 # Terminal helpers
@@ -111,10 +141,12 @@ class Command:
         Run the command for a step.
         Returns the exit code.
         """
-        text = step.get("text", "")
-        command = step.get("command", text)
-        stdin_ = step.get("input")  # optional string fed to stdin
-        help_ = step.get("help", "")
+        defs = variable_definitions or {}
+        text = interpolate_variables(step.get("text", ""), defs)
+        command = interpolate_variables(step.get("command", text), defs)
+        stdin_raw = step.get("input")  # optional string fed to stdin
+        stdin_ = interpolate_variables(stdin_raw, defs) if isinstance(stdin_raw, str) else stdin_raw
+        help_ = interpolate_variables(step.get("help", ""), defs)
 
         if help_:
             print(f"\n{Style.YELLOW}ℹ  {help_}{Style.RESET}\n")
@@ -160,11 +192,11 @@ class Menu:
     @staticmethod
     def _step_display_text(step: dict) -> str:
         """Return the label text shown in the menu for a step."""
-        return step.get("text", "")
+        return interpolate_variables(step.get("text", ""), variable_definitions)
 
     @staticmethod
     def _step_help_text(step: dict) -> str:
-        return step.get("help", "")
+        return interpolate_variables(step.get("help", ""), variable_definitions)
 
     @staticmethod
     def _is_noop(step: dict) -> bool:
@@ -172,7 +204,12 @@ class Menu:
         return "text" not in step
 
     @staticmethod
-    def draw_menu(steps: list, selected: int, mode_label: str, max_length: int) -> None:
+    def draw_menu(
+        steps: list,
+        selected: int,
+        mode_label: str,
+        max_length: int,
+    ) -> None:
         Screen.clear()
         header = f"[ {mode_label} ]  ↑/↓ or j/k to move, ENTER to run, q to quit"
         print(f"{Style.BOLD}{header}{Style.RESET}")
@@ -236,7 +273,10 @@ class Menu:
         return new
 
     @staticmethod
-    def _run_steps_until_menu_return(steps: list, selected: int) -> int:
+    def _run_steps_until_menu_return(
+        steps: list,
+        selected: int,
+    ) -> int:
         """Run step(s) starting at selected; return selected index when returning to the menu."""
         while True:
             step = steps[selected]
@@ -330,9 +370,24 @@ class Menu:
 # ─────────────────────────────────────────────
 
 
+def interpolate_variables(text: str, definitions: VariableDefinitions) -> str:
+    """Replace ``{{NAME}}`` placeholders; unknown names are left unchanged."""
+
+    def repl(match: re.Match[str]) -> str:
+        name = match.group(1)
+        if name not in definitions:
+            return match.group(0)
+        value = definitions[name]
+        if callable(value):
+            return str(value())
+        return str(value)
+
+    return _VAR_PATTERN.sub(repl, text)
+
+
 def load_config(json_file: str | None = None) -> tuple:
     """
-    Load config from build_and_deploy.json in the same directory
+    Load config from a json file in the same (in some TBD) directory
     as this script. Exits with code 1 if the file is missing or invalid.
     Returns config.
     """
@@ -341,7 +396,7 @@ def load_config(json_file: str | None = None) -> tuple:
     else:
         json_path = os.path.join(
             os.path.dirname(os.path.abspath(__file__)),
-            "build_and_deploy.json",
+            "build_and_deploy_vanguard.json",
         )
     if not os.path.exists(json_path):
         print(f"ERROR: Steps file not found: {json_path}", file=sys.stderr)
@@ -365,6 +420,45 @@ def _ensure_quit_step(steps: list) -> None:
     if steps and isinstance(steps[-1], dict) and steps[-1].get("text") == "-- quit --":
         return
     steps.append({"text": "-- quit --"})
+
+
+def _make_temp_directory(suffix: str = None, prefix: str = None) -> str:
+    if os.path.isdir("/tmp"):
+        tmp_dir = "/tmp"
+    else:
+        tmp_dir = os.environ.get("TMPDIR")
+    if tmp_dir:
+        return tempfile.mkdtemp(dir=os.path.expanduser(tmp_dir), suffix=suffix, prefix=prefix)
+    return tempfile.mkdtemp(prefix=prefix, suffix=suffix)
+
+
+def _cleanup_temp_directory() -> None:
+    """Remove the process temp dir created in main(); safe if already gone."""
+    path = temporary_directory
+    if not path or not os.path.isdir(path):
+        return
+    try:
+        shutil.rmtree(path)
+    except OSError:
+        pass
+
+
+def _on_signal(signum: int, _frame) -> None:
+    """Restore terminal and remove temp dir before exiting on common signals."""
+    try:
+        Screen.leave_alternate()
+    except OSError:
+        pass
+    _cleanup_temp_directory()
+    sys.exit(128 + signum)
+
+
+def _register_signal_handlers() -> None:
+    for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGABRT):
+        try:
+            signal.signal(sig, _on_signal)
+        except (OSError, AttributeError):
+            pass
 
 
 # ─────────────────────────────────────────────
@@ -399,47 +493,68 @@ def main() -> None:
         default=None,
         help="Path to a JSON file containing step definitions (overrides build_and_deploy.json)",
     )
+    parser.add_argument(
+        "-r",
+        "--run",
+        action="store_true",
+        help="Run the interactive menu (required; without this flag, help is printed and the program exits)",
+    )
     args = parser.parse_args()
+
+    if not args.run:
+        parser.print_help()
+        sys.exit(0)
 
     config = load_config(args.json_file)
 
     settings = config.get("settings") or {}
 
-    build_type: str | None = None
+    build_name = settings.get("build_name", "build_and_deploy")
 
-    if args.backend_only:
-        steps = config.get("steps", {}).get("backend")
-        build_type = "BACKEND ONLY"
-    else:
-        steps = config.get("steps", {}).get("full")
-        build_type = "FULL DEPLOY"
+    global temporary_directory
+    temporary_directory = _make_temp_directory(prefix=build_name, suffix=str(os.getpid()))
+    _register_signal_handlers()
 
-    if not steps:
-        print(f"ERROR: No steps found for {build_type}.")
-        sys.exit(1)
+    try:
+        build_type: str | None = None
 
-    _ensure_quit_step(steps)
-
-    if not args.skip_directory_check:
-        from_cli = args.directory
-        from_json = settings.get("build_directory")
-        if from_cli is not None and str(from_cli).strip() != "":
-            build_dir = from_cli.strip()
-        elif from_json is not None and str(from_json).strip() != "":
-            build_dir = from_json.strip()
+        if args.backend_only:
+            steps = config.get("steps", {}).get("backend")
+            build_type = "BACKEND ONLY"
         else:
-            print(
-                "ERROR: Set settings.build_directory in the JSON file, or pass -d/--directory.",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-        build_dir = os.path.expanduser(build_dir)
-        target = os.path.realpath(os.path.abspath(build_dir))
-        cwd_real = os.path.realpath(os.getcwd())
-        if cwd_real != target:
-            os.chdir(target)
+            steps = config.get("steps", {}).get("full")
+            build_type = "FULL DEPLOY"
 
-    Menu.run_menu(steps, build_type)
+        if not steps:
+            print(f"ERROR: No steps found for {build_type}.")
+            sys.exit(1)
+
+        _ensure_quit_step(steps)
+
+        if not args.skip_directory_check:
+            from_cli = args.directory
+            from_json = settings.get("build_directory")
+            if from_cli is not None and str(from_cli).strip() != "":
+                build_dir = from_cli.strip()
+            elif from_json is not None and str(from_json).strip() != "":
+                build_dir = from_json.strip()
+            else:
+                print(
+                    "ERROR: Set settings.build_directory in the JSON file, or pass -d/--directory.",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+            build_dir = os.path.expanduser(build_dir)
+            target = os.path.realpath(os.path.abspath(build_dir))
+            cwd_real = os.path.realpath(os.getcwd())
+            if cwd_real != target:
+                os.chdir(target)
+
+        Menu.run_menu(steps, build_type)
+    finally:
+        # Runs on normal return and when sys.exit() is used (e.g. q / -- quit --), which
+        # atexit can skip under some debuggers or embedding setups.
+        _cleanup_temp_directory()
 
 
 if __name__ == "__main__":

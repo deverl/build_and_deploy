@@ -1,6 +1,7 @@
 {
     "settings": {
-        "build_directory": "/root/vanguard"
+        "build_directory": "/root/vanguard",
+        "build_name": "test"
     },
     "steps": {
         "full": [
@@ -18,11 +19,12 @@
             },
             {
                 "text": "test awk",
-                "command": "awk '/\\^{52}/{found=1; next} found && /^-{36}$/{exit} found' changes.txt"
+                "command": "awk '/\\^{52}/{found=1; next} found && /^-{36}$/{exit} found' {{TMPDIR}}/changes.txt",
+                "comment": "The awk command is used to extract the build merges from the changes.txt file. It copies everything after 52 ^ characters and up to 36 - characters."
             },
             {
                 "text": "Get build merges",
-                "command": "jaguar/tools/cicd/get_build_merges.sh -v | tee /tmp/changes.txt"
+                "command": "jaguar/tools/cicd/get_build_merges.sh -v | tee {{TMPDIR}}/changes.txt"
             },
             {
                 "text": "git status"
@@ -43,7 +45,7 @@
             },
             {
                 "text": "Get build merges",
-                "command": "jaguar/tools/cicd/get_build_merges.sh -v | tee /tmp/changes.txt"
+                "command": "jaguar/tools/cicd/get_build_merges.sh -v | tee {{TMPDIR}}/changes.txt"
             }
         ]
     }

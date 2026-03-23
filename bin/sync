@@ -2,5 +2,5 @@
 
 cd ~/Projects/build_and_deploy
 
-rsync -av build_and_deploy.py build_and_deploy.json build-box:bin/
+rsync -av build_and_deploy.py build_and_deploy_vanguard.json build-box:bin/
 

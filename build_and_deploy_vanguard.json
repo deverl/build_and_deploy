@@ -1,5 +1,7 @@
 {
     "settings": {
+        "build_name": "vanguard",
+        "comment_build_name": "The name of the build, used to create the temporary directory.",
         "build_directory": "/root/vanguard"
     },
     "steps": {
@@ -9,7 +11,10 @@
             },
             {
                 "text": "Get build merges",
-                "command": "jaguar/tools/cicd/get_build_merges.sh -v > /tmp/changes.txt ; awk '/\\^{52}/{found=1; next} found && /^-{36}$/{exit} found' /tmp/changes.txt"
+                "command": "jaguar/tools/cicd/get_build_merges.sh -v > {{TMPDIR}}/changes.txt ; awk '/\\^{52}/{found=1; next} found && /^-{36}$/{exit} found' {{TMPDIR}}/changes.txt",
+                "comment1": "The awk command is used to extract the build merges from the changes.txt file.",
+                "comment2": "It copies everything after 52 ^ characters and up to 36 - characters.",
+                "comment3": "{{TMPDIR}} is a placeholder for the process's temporary directory."
             },
             {
                 "text": "git status (fail if changes)",
@@ -92,7 +97,10 @@
             },
             {
                 "text": "Get build merges",
-                "command": "jaguar/tools/cicd/get_build_merges.sh -v > /tmp/changes.txt ; awk '/\\^{52}/{found=1; next} found && /^-{36}$/{exit} found' /tmp/changes.txt"
+                "command": "jaguar/tools/cicd/get_build_merges.sh -v > {{TMPDIR}}/changes.txt ; awk '/\\^{52}/{found=1; next} found && /^-{36}$/{exit} found' {{TMPDIR}}/changes.txt",
+                "comment1": "The awk command is used to extract the build merges from the changes.txt file.",
+                "comment2": "It copies everything after 52 ^ characters and up to 36 - characters.",
+                "comment3": "{{TMPDIR}} is a placeholder for the process's temporary directory."
             },
             {
                 "text": "git status (fail if changes)",
