@@ -214,6 +214,10 @@ class Menu:
         header = f'[ {mode_label} ]  ↑/↓ or j/k to move, ENTER to run, q to quit'
         print(f'{Style.BOLD}{header}{Style.RESET}')
         print()
+        tmp = temporary_directory if temporary_directory is not None else '/tmp'
+        print(f'{Style.BOLD}Working Directory:{Style.RESET} {os.getcwd()}')
+        print(f'{Style.BOLD}Temporary Directory:{Style.RESET} {tmp}')
+        print()
 
         max_length += 2  # One leading and one trailing space
 
