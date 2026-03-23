@@ -491,7 +491,7 @@ def main() -> None:
         "-f",
         "--json_file",
         default=None,
-        help="Path to a JSON file containing step definitions (overrides build_and_deploy.json)",
+        help="Path to a JSON file containing step definitions (overrides build_and_deploy_vanguard.json)",
     )
     parser.add_argument(
         "-r",
