@@ -527,6 +527,11 @@ def main() -> None:
 
     config_path = ['/usr/local/etc', '~/bin', '/tmp']
 
+    env_config_path = os.environ.get('CONFIG_PATH')
+    if env_config_path:
+        extra_dirs = [d.strip() for d in env_config_path.split(':') if d.strip()]
+        config_path = extra_dirs + config_path
+
     config = load_config(config_path, args.json_file)
 
     settings = config.get('settings') or {}
