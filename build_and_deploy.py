@@ -47,13 +47,13 @@ temporary_directory: str | None = None
 VariableDefinitions = dict[str, str | Callable[[], str]]
 
 variable_definitions: VariableDefinitions = {
-    "PID": lambda: str(os.getpid()),
-    "DATE": lambda: datetime.now().strftime("%Y-%m-%d"),
-    "TIME": lambda: datetime.now().strftime("%H:%M:%S"),
-    "TMPDIR": lambda: temporary_directory if temporary_directory is not None else "/tmp",
+    'PID': lambda: str(os.getpid()),
+    'DATE': lambda: datetime.now().strftime('%Y-%m-%d'),
+    'TIME': lambda: datetime.now().strftime('%H:%M:%S'),
+    'TMPDIR': lambda: temporary_directory if temporary_directory is not None else '/tmp',
 }
 
-_VAR_PATTERN = re.compile(r"\{\{([A-Za-z0-9_]+)\}\}")
+_VAR_PATTERN = re.compile(r'\{\{([A-Za-z0-9_]+)\}\}')
 
 
 # ─────────────────────────────────────────────
@@ -85,16 +85,16 @@ class Screen:
     @staticmethod
     def enter_alternate() -> None:
         """Use the terminal alternate buffer so the previous screen restores on exit."""
-        print("\033[?1049h", end="", flush=True)
+        print('\033[?1049h', end='', flush=True)
 
     @staticmethod
     def leave_alternate() -> None:
         """Return to the main screen buffer (undo enter_alternate)."""
-        print("\033[?1049l", end="", flush=True)
+        print('\033[?1049l', end='', flush=True)
 
     @staticmethod
     def clear() -> None:
-        print("\033[2J\033[H", end="", flush=True)
+        print('\033[2J\033[H', end='', flush=True)
 
 
 class Keyboard:
@@ -107,13 +107,13 @@ class Keyboard:
         old = termios.tcgetattr(fd)
         try:
             tty.setraw(fd)
-            ch = os.read(fd, 1).decode("latin-1")
-            if ch == "\x1b":
+            ch = os.read(fd, 1).decode('latin-1')
+            if ch == '\x1b':
                 # Read the next two bytes of the escape sequence directly.
                 # They arrive immediately after the escape byte, so no timeout needed.
                 try:
-                    ch += os.read(fd, 1).decode("latin-1")
-                    ch += os.read(fd, 1).decode("latin-1")
+                    ch += os.read(fd, 1).decode('latin-1')
+                    ch += os.read(fd, 1).decode('latin-1')
                 except OSError:
                     pass
             return ch
@@ -142,21 +142,21 @@ class Command:
         Returns the exit code.
         """
         defs = variable_definitions or {}
-        text = interpolate_variables(step.get("text", ""), defs)
-        command = interpolate_variables(step.get("command", text), defs)
-        stdin_raw = step.get("input")  # optional string fed to stdin
+        text = interpolate_variables(step.get('text', ''), defs)
+        command = interpolate_variables(step.get('command', text), defs)
+        stdin_raw = step.get('input')  # optional string fed to stdin
         stdin_ = interpolate_variables(stdin_raw, defs) if isinstance(stdin_raw, str) else stdin_raw
-        help_ = interpolate_variables(step.get("help", ""), defs)
+        help_ = interpolate_variables(step.get('help', ''), defs)
 
         if help_:
-            print(f"\n{Style.YELLOW}ℹ  {help_}{Style.RESET}\n")
+            print(f'\n{Style.YELLOW}ℹ  {help_}{Style.RESET}\n')
 
         exit_code = 1
         stdout_needs_newline = True
         if not suppress_command_header:
-            print(f"{Style.BOLD}>>> {command}{Style.RESET}")
+            print(f'{Style.BOLD}>>> {command}{Style.RESET}')
         if not suppress_pre_separator:
-            print("─" * min(TERM_WIDTH, 72))
+            print('─' * min(TERM_WIDTH, 72))
 
         # Run via subprocess: when `input` is set, feed stdin through a pipe; leave
         # stdout/stderr inherited so the child writes directly to the terminal (no
@@ -167,7 +167,7 @@ class Command:
                 shell=True,
                 stdin=subprocess.PIPE,
             )
-            proc.communicate(input=stdin_.encode("utf-8"))
+            proc.communicate(input=stdin_.encode('utf-8'))
             exit_code = proc.returncode if proc.returncode is not None else 1
         else:
             exit_code = subprocess.call(command, shell=True)
@@ -176,8 +176,8 @@ class Command:
             # If the child's last output didn't end with \n (common for prompts), the
             # cursor is still on that line — print a newline so the separator draws below.
             if stdout_needs_newline:
-                sys.stdout.write("\n")
-            print("─" * min(TERM_WIDTH, 72))
+                sys.stdout.write('\n')
+            print('─' * min(TERM_WIDTH, 72))
         return exit_code
 
 
@@ -192,16 +192,16 @@ class Menu:
     @staticmethod
     def _step_display_text(step: dict) -> str:
         """Return the label text shown in the menu for a step."""
-        return interpolate_variables(step.get("text", ""), variable_definitions)
+        return interpolate_variables(step.get('text', ''), variable_definitions)
 
     @staticmethod
     def _step_help_text(step: dict) -> str:
-        return interpolate_variables(step.get("help", ""), variable_definitions)
+        return interpolate_variables(step.get('help', ''), variable_definitions)
 
     @staticmethod
     def _is_noop(step: dict) -> bool:
         """True for steps that are display/comment only (no text key)."""
-        return "text" not in step
+        return 'text' not in step
 
     @staticmethod
     def draw_menu(
@@ -211,8 +211,8 @@ class Menu:
         max_length: int,
     ) -> None:
         Screen.clear()
-        header = f"[ {mode_label} ]  ↑/↓ or j/k to move, ENTER to run, q to quit"
-        print(f"{Style.BOLD}{header}{Style.RESET}")
+        header = f'[ {mode_label} ]  ↑/↓ or j/k to move, ENTER to run, q to quit'
+        print(f'{Style.BOLD}{header}{Style.RESET}')
         print()
 
         max_length += 2  # One leading and one trailing space
@@ -225,19 +225,19 @@ class Menu:
 
             if is_noop:
                 # Comment/notice line – always dimmed, never selectable
-                note = f"  ─── {help_} ───"
-                print(f"{Style.DIM}{Style.YELLOW}{note}{Style.RESET}")
+                note = f'  ─── {help_} ───'
+                print(f'{Style.DIM}{Style.YELLOW}{note}{Style.RESET}')
                 continue
 
             # Build display row
-            row_label = f" {label}"
-            suffix = f"  {Style.DIM}({help_}){Style.RESET}" if help_ else ""
+            row_label = f' {label}'
+            suffix = f'  {Style.DIM}({help_}){Style.RESET}' if help_ else ''
 
             if is_sel:
-                print(f" {Style.REVERSE}{row_label:{max_length}}{Style.RESET}{suffix}", end="")
+                print(f' {Style.REVERSE}{row_label:{max_length}}{Style.RESET}{suffix}', end='')
                 print()
             else:
-                print(f" {row_label}{suffix}")
+                print(f' {row_label}{suffix}')
 
         print()
 
@@ -284,21 +284,21 @@ class Menu:
             exit_code = Command.run(step)
 
             if exit_code != 0:
-                on_error = step.get("on_error")
+                on_error = step.get('on_error')
                 if on_error and isinstance(on_error, list):
-                    print(f"\n{Style.YELLOW}Running on_error commands…{Style.RESET}\n")
+                    print(f'\n{Style.YELLOW}Running on_error commands…{Style.RESET}\n')
                     for cmd in on_error:
                         if isinstance(cmd, str):
                             Command.run(
-                                {"command": cmd},
+                                {'command': cmd},
                                 suppress_pre_separator=True,
                                 suppress_post_separator=True,
                                 suppress_command_header=True,
                             )
                     print()
                 print(
-                    f"\n{Style.RED}⚠  Step exited with code {exit_code}.{Style.RESET}  "
-                    "Press any key to return to menu…"
+                    f'\n{Style.RED}⚠  Step exited with code {exit_code}.{Style.RESET}  '
+                    'Press any key to return to menu…'
                 )
                 Keyboard.read_key()
                 return selected
@@ -306,23 +306,23 @@ class Menu:
             advanced = Menu.next_runnable(steps, selected)
             if advanced == selected:
                 print(
-                    f"\n{Style.GREEN}✓  Step complete.{Style.RESET}  "
-                    "Press any key to continue to the next step…"
+                    f'\n{Style.GREEN}✓  Step complete.{Style.RESET}  '
+                    'Press any key to continue to the next step…'
                 )
                 Keyboard.read_key()
                 return selected
 
             selected = advanced
-            if not step.get("auto_advance"):
+            if not step.get('auto_advance'):
                 print(
-                    f"\n{Style.GREEN}✓  Step complete.{Style.RESET}  "
-                    "Press any key to continue to the next step…"
+                    f'\n{Style.GREEN}✓  Step complete.{Style.RESET}  '
+                    'Press any key to continue to the next step…'
                 )
                 Keyboard.read_key()
                 return selected
 
             next_step = steps[selected]
-            if next_step.get("text") == "-- quit --":
+            if next_step.get('text') == '-- quit --':
                 sys.exit(0)
 
     @staticmethod
@@ -340,24 +340,24 @@ class Menu:
 
                 key = Keyboard.read_key()
 
-                if key in ("\x1b[A", "\x1b[D", "k", "K"):  # Up / Left (vi: k)
+                if key in ('\x1b[A', '\x1b[D', 'k', 'K'):  # Up / Left (vi: k)
                     selected = Menu._navigate_up(steps, selected)
 
-                elif key in ("\x1b[B", "\x1b[C", "j", "J"):  # Down / Right (vi: j)
+                elif key in ('\x1b[B', '\x1b[C', 'j', 'J'):  # Down / Right (vi: j)
                     selected = Menu._navigate_down(steps, selected)
 
-                elif key in ("q", "Q", "\x03"):  # q / Ctrl-C
+                elif key in ('q', 'Q', '\x03'):  # q / Ctrl-C
                     sys.exit(0)
 
-                elif key in ("\r", "\n", ""):  # Enter
+                elif key in ('\r', '\n', ''):  # Enter
                     step = steps[selected]
 
                     if Menu._is_noop(step):
                         continue
 
-                    label = step.get("text", "")
+                    label = step.get('text', '')
 
-                    if label == "-- quit --":
+                    if label == '-- quit --':
                         sys.exit(0)
 
                     selected = Menu._run_steps_until_menu_return(steps, selected)
@@ -385,28 +385,46 @@ def interpolate_variables(text: str, definitions: VariableDefinitions) -> str:
     return _VAR_PATTERN.sub(repl, text)
 
 
-def load_config(json_file: str | None = None) -> tuple:
+def load_config(config_path: list[str], json_file: str | None = None) -> tuple:
     """
-    Load config from a json file in the same (in some TBD) directory
-    as this script. Exits with code 1 if the file is missing or invalid.
-    Returns config.
+    Load config from a JSON file. If ``json_file`` resolves to an existing path
+    (relative or absolute), that file is used. Otherwise the basename of
+    ``json_file`` (default ``build_and_deploy_vanguard.json``) is searched for
+    in each directory listed in ``config_path``, in order, then in this script's
+    directory; the first match wins.
+    Exits with code 1 if the file is missing or invalid.
     """
-    if json_file:
-        json_path = os.path.abspath(os.path.expanduser(json_file))
+
+    json_file = json_file or 'build_and_deploy_vanguard.json'
+    explicit = os.path.abspath(os.path.expanduser(json_file))
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    search_dirs = [os.path.expanduser(d) for d in config_path] + [script_dir]
+
+    if os.path.isfile(explicit):
+        json_path = explicit
     else:
-        json_path = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)),
-            "build_and_deploy_vanguard.json",
-        )
-    if not os.path.exists(json_path):
-        print(f"ERROR: Steps file not found: {json_path}", file=sys.stderr)
-        sys.exit(1)
+        basename = os.path.basename(json_file)
+        json_path = None
+        for d in search_dirs:
+            candidate = os.path.join(d, basename)
+            if os.path.isfile(candidate):
+                json_path = candidate
+                break
+        if json_path is None:
+            searched = [os.path.join(d, basename) for d in search_dirs]
+            print(
+                f'ERROR: Steps file not found: {basename}\n'
+                f'  Tried as path: {explicit}\n'
+                f'  Searched: {", ".join(searched)}',
+                file=sys.stderr,
+            )
+            sys.exit(1)
     try:
         with open(json_path) as f:
             config = json.load(f)
             return config
     except (json.JSONDecodeError, OSError) as e:
-        print(f"ERROR: Could not read {json_path}: {e}", file=sys.stderr)
+        print(f'ERROR: Could not read {json_path}: {e}', file=sys.stderr)
         sys.exit(1)
 
 
@@ -417,16 +435,16 @@ def _ensure_quit_step(steps: list) -> None:
     """
     if not isinstance(steps, list):
         return
-    if steps and isinstance(steps[-1], dict) and steps[-1].get("text") == "-- quit --":
+    if steps and isinstance(steps[-1], dict) and steps[-1].get('text') == '-- quit --':
         return
-    steps.append({"text": "-- quit --"})
+    steps.append({'text': '-- quit --'})
 
 
 def _make_temp_directory(suffix: str = None, prefix: str = None) -> str:
-    if os.path.isdir("/tmp"):
-        tmp_dir = "/tmp"
+    if os.path.isdir('/tmp'):
+        tmp_dir = '/tmp'
     else:
-        tmp_dir = os.environ.get("TMPDIR")
+        tmp_dir = os.environ.get('TMPDIR')
     if tmp_dir:
         return tempfile.mkdtemp(dir=os.path.expanduser(tmp_dir), suffix=suffix, prefix=prefix)
     return tempfile.mkdtemp(prefix=prefix, suffix=suffix)
@@ -467,37 +485,37 @@ def _register_signal_handlers() -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Interactive build-and-deploy menu.")
+    parser = argparse.ArgumentParser(description='Interactive build-and-deploy menu.')
     parser.add_argument(
-        "-b",
-        "--backend-only",
-        action="store_true",
-        help="Use backend-only step list",
+        '-b',
+        '--backend-only',
+        action='store_true',
+        help='Use backend-only step list',
     )
     parser.add_argument(
-        "-d",
-        "--directory",
+        '-d',
+        '--directory',
         default=None,
-        metavar="DIR",
-        help="Working directory for steps (overrides settings.build_directory in JSON)",
+        metavar='DIR',
+        help='Working directory for steps (overrides settings.build_directory in JSON)',
     )
     parser.add_argument(
-        "-s",
-        "--skip_directory_check",
-        action="store_true",
-        help="Do not change directory on startup (ignores -d and JSON build_directory)",
+        '-s',
+        '--skip_directory_check',
+        action='store_true',
+        help='Do not change directory on startup (ignores -d and JSON build_directory)',
     )
     parser.add_argument(
-        "-f",
-        "--json_file",
+        '-f',
+        '--json_file',
         default=None,
-        help="Path to a JSON file containing step definitions (overrides build_and_deploy_vanguard.json)",
+        help='Path to a JSON file containing step definitions (overrides build_and_deploy_vanguard.json)',
     )
     parser.add_argument(
-        "-r",
-        "--run",
-        action="store_true",
-        help="Run the interactive menu (required; without this flag, help is printed and the program exits)",
+        '-r',
+        '--run',
+        action='store_true',
+        help='Run the interactive menu (required; without this flag, help is printed and the program exits)',
     )
     args = parser.parse_args()
 
@@ -505,11 +523,13 @@ def main() -> None:
         parser.print_help()
         sys.exit(0)
 
-    config = load_config(args.json_file)
+    config_path = ['/usr/local/etc', '/tmp']
 
-    settings = config.get("settings") or {}
+    config = load_config(config_path, args.json_file)
 
-    build_name = settings.get("build_name", "build_and_deploy")
+    settings = config.get('settings') or {}
+
+    build_name = settings.get('build_name', 'build_and_deploy')
 
     global temporary_directory
     temporary_directory = _make_temp_directory(prefix=build_name, suffix=str(os.getpid()))
@@ -520,28 +540,28 @@ def main() -> None:
         build_type: str | None = None
 
         if args.backend_only:
-            steps = config.get("steps", {}).get("backend")
-            build_type = "BACKEND ONLY"
+            steps = config.get('steps', {}).get('backend')
+            build_type = 'BACKEND ONLY'
         else:
-            steps = config.get("steps", {}).get("full")
-            build_type = "FULL DEPLOY"
+            steps = config.get('steps', {}).get('full')
+            build_type = 'FULL DEPLOY'
 
         if not steps:
-            print(f"ERROR: No steps found for {build_type}.")
+            print(f'ERROR: No steps found for {build_type}.')
             sys.exit(1)
 
         _ensure_quit_step(steps)
 
         if not args.skip_directory_check:
             from_cli = args.directory
-            from_json = settings.get("build_directory")
-            if from_cli is not None and str(from_cli).strip() != "":
+            from_json = settings.get('build_directory')
+            if from_cli is not None and str(from_cli).strip() != '':
                 build_dir = from_cli.strip()
-            elif from_json is not None and str(from_json).strip() != "":
+            elif from_json is not None and str(from_json).strip() != '':
                 build_dir = from_json.strip()
             else:
                 print(
-                    "ERROR: Set settings.build_directory in the JSON file, or pass -d/--directory.",
+                    'ERROR: Set settings.build_directory in the JSON file, or pass -d/--directory.',
                     file=sys.stderr,
                 )
                 sys.exit(1)
@@ -558,5 +578,5 @@ def main() -> None:
         _cleanup_temp_directory()
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
