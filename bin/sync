@@ -2,6 +2,6 @@
 
 cd ~/Projects/build_and_deploy
 
-rsync -av build_and_deploy.py build_and_deploy_vanguard.json build-box:bin/
-rsync -av build_and_deploy.py ~/develop/infrastructure/build-box/usr/local/bin/
-rsync -av build_and_deploy_vanguard.json ~/develop/infrastructure/build-box/usr/local/etc/
+rsync -av ~/develop/infrastructure/build-box/usr/local/bin/build_and_deploy.py  ~/Projects/build_and_deploy/build_and_deploy.py
+rsync -av ~/develop/infrastructure/build-box/usr/local/etc/build_and_deploy_vanguard.json  ~/Projects/build_and_deploy/build_and_deploy_vanguard.json 
+

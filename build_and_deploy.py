@@ -525,12 +525,7 @@ def main() -> None:
         parser.print_help()
         sys.exit(0)
 
-    config_path = ['/usr/local/etc', '~/bin', '/tmp']
-
-    env_config_path = os.environ.get('CONFIG_PATH')
-    if env_config_path:
-        extra_dirs = [d.strip() for d in env_config_path.split(':') if d.strip()]
-        config_path = extra_dirs + config_path
+    config_path = ['/usr/local/etc', '~/etc']
 
     config = load_config(config_path, args.json_file)
 
