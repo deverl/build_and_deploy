@@ -74,7 +74,9 @@ class Style:
     # fmt: on
 
 
-TERM_WIDTH = shutil.get_terminal_size((80, 24)).columns
+def get_term_width() -> int:
+    """Return current terminal width (re-queried on each call to handle resizes)."""
+    return shutil.get_terminal_size((80, 24)).columns
 
 
 class Screen:
@@ -105,13 +107,13 @@ class Keyboard:
         old = termios.tcgetattr(fd)
         try:
             tty.setraw(fd)
-            ch = os.read(fd, 1).decode('latin-1')
+            ch = os.read(fd, 1).decode('utf-8', errors='replace')
             if ch == '\x1b':
                 # Read the next two bytes of the escape sequence directly.
                 # They arrive immediately after the escape byte, so no timeout needed.
                 try:
-                    ch += os.read(fd, 1).decode('latin-1')
-                    ch += os.read(fd, 1).decode('latin-1')
+                    ch += os.read(fd, 1).decode('utf-8', errors='replace')
+                    ch += os.read(fd, 1).decode('utf-8', errors='replace')
                 except OSError:
                     pass
             return ch
@@ -150,11 +152,10 @@ class Command:
             print(f'\n{Style.YELLOW}ℹ  {help_}{Style.RESET}\n')
 
         exit_code = 1
-        stdout_needs_newline = True
         if not suppress_command_header:
             print(f'{Style.BOLD}>>> {command}{Style.RESET}')
         if not suppress_pre_separator:
-            print('─' * min(TERM_WIDTH, 72))
+            print('─' * min(get_term_width(), 72))
 
         # Run via subprocess: when `input` is set, feed stdin through a pipe; leave
         # stdout/stderr inherited so the child writes directly to the terminal (no
@@ -171,11 +172,7 @@ class Command:
             exit_code = subprocess.call(command, shell=True)
 
         if not suppress_post_separator:
-            # If the child's last output didn't end with \n (common for prompts), the
-            # cursor is still on that line — print a newline so the separator draws below.
-            if stdout_needs_newline:
-                sys.stdout.write('\n')
-            print('─' * min(TERM_WIDTH, 72))
+            print('─' * min(get_term_width(), 72))
         return exit_code
 
 
@@ -280,7 +277,16 @@ class Menu:
         selected: int,
     ) -> int:
         """Run step(s) starting at selected; return selected index when returning to the menu."""
+        visited: set[int] = set()
         while True:
+            if selected in visited:
+                print(
+                    f'\n{Style.YELLOW}⚠  Auto-advance cycle detected at step {selected}. '
+                    f'Returning to menu.{Style.RESET}'
+                )
+                Keyboard.read_key()
+                return selected
+            visited.add(selected)
             step = steps[selected]
             Screen.clear()
             exit_code = Command.run(step)
@@ -351,7 +357,7 @@ class Menu:
                 elif key in ('q', 'Q', '\x03'):  # q / Ctrl-C
                     sys.exit(0)
 
-                elif key in ('\r', '\n', ''):  # Enter
+                elif key in ('\r', '\n'):  # Enter
                     step = steps[selected]
 
                     if Menu._is_noop(step):
@@ -387,7 +393,7 @@ def interpolate_variables(text: str, definitions: VariableDefinitions) -> str:
     return _VAR_PATTERN.sub(repl, text)
 
 
-def load_config(config_path: list[str], json_file: str | None = None) -> tuple:
+def load_config(config_path: list[str], json_file: str | None = None) -> dict:
     """
     Load config from a JSON file. If ``json_file`` resolves to an existing path
     (relative or absolute), that file is used. Otherwise the basename of
@@ -424,10 +430,18 @@ def load_config(config_path: list[str], json_file: str | None = None) -> tuple:
     try:
         with open(json_path) as f:
             config = json.load(f)
-            return config
     except (json.JSONDecodeError, OSError) as e:
         print(f'ERROR: Could not read {json_path}: {e}', file=sys.stderr)
         sys.exit(1)
+
+    if not isinstance(config, dict):
+        print(f'ERROR: Expected top-level JSON object in {json_path}, got {type(config).__name__}', file=sys.stderr)
+        sys.exit(1)
+    if 'steps' not in config or not isinstance(config.get('steps'), dict):
+        print(f'ERROR: Missing or invalid "steps" key in {json_path}', file=sys.stderr)
+        sys.exit(1)
+
+    return config
 
 
 def _ensure_quit_step(steps: list) -> None:
@@ -436,13 +450,13 @@ def _ensure_quit_step(steps: list) -> None:
     Mutates the list in place.
     """
     if not isinstance(steps, list):
-        return
+        raise TypeError(f'Expected a list of steps, got {type(steps).__name__}')
     if steps and isinstance(steps[-1], dict) and steps[-1].get('text') == '-- quit --':
         return
     steps.append({'text': '-- quit --'})
 
 
-def _make_temp_directory(suffix: str = None, prefix: str = None) -> str:
+def _make_temp_directory(suffix: str | None = None, prefix: str | None = None) -> str:
     if os.path.isdir('/tmp'):
         tmp_dir = '/tmp'
     else:
@@ -463,8 +477,14 @@ def _cleanup_temp_directory() -> None:
         pass
 
 
+_cleaning_up = False
+
 def _on_signal(signum: int, _frame) -> None:
     """Restore terminal and remove temp dir before exiting on common signals."""
+    global _cleaning_up
+    if _cleaning_up:
+        return
+    _cleaning_up = True
     try:
         Screen.leave_alternate()
     except OSError:
@@ -575,9 +595,10 @@ def main() -> None:
 
         Menu.run_menu(steps, build_type)
     finally:
-        # Runs on normal return and when sys.exit() is used (e.g. q / -- quit --), which
-        # atexit can skip under some debuggers or embedding setups.
-        _cleanup_temp_directory()
+        global _cleaning_up
+        if not _cleaning_up:
+            _cleaning_up = True
+            _cleanup_temp_directory()
 
 
 if __name__ == '__main__':
