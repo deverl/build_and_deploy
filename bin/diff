@@ -11,12 +11,12 @@ else
 fi
 
 
-SRC=~/develop/infrastructure/build-box/usr/local/etc/build_and_deploy_vanguard.json
-DST=~/Projects/build_and_deploy/build_and_deploy_vanguard.json
+SRC=~/develop/infrastructure/build-box/usr/local/bin/build_and_deploy.py
+DST=~/Projects/build_and_deploy/build_and_deploy.py
 
 if cmp -s $SRC $DST ; then
     echo "python files are identical"
 else
-    bcomp $SRC $DST 
+    bcomp $SRC $DST
 fi
 
