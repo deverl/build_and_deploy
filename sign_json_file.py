@@ -3,6 +3,7 @@
 # sign_pipeline.py
 import argparse
 import base64
+from pathlib import Path
 
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
@@ -25,10 +26,14 @@ def main() -> None:
     parser.add_argument(
         '-s',
         '--signature_file',
-        default='build_and_deploy_vanguard.json.sig',
-        help='Path to write base64 signature (default: build_and_deploy_vanguard.json.sig)',
+        default=None,
+        help='Path to write base64 signature (default: <json_file>.sig)',
     )
     args = parser.parse_args()
+
+    json_path = Path(args.json_file)
+    if args.signature_file is None:
+        args.signature_file = str(json_path.with_suffix(json_path.suffix + '.sig'))
 
     with open(args.private_key, 'rb') as f:
         private_key = serialization.load_pem_private_key(f.read(), password=None)
