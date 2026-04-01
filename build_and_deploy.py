@@ -413,6 +413,10 @@ def verify_signature(json_path: str) -> dict:
 
     sig_path = json_path + '.sig'
 
+    if not os.path.isfile(sig_path):
+        print(f'FATAL: Signature file not found: {sig_path}', file=sys.stderr)
+        sys.exit(1)
+
     with open(json_path, 'rb') as f:
         raw = f.read()
     with open(sig_path, 'rb') as f:
