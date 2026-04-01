@@ -199,11 +199,24 @@ class Menu:
         return 'text' not in step
 
     @staticmethod
+    def _status_prefix(i: int, step_status: list[int | None], is_noop: bool) -> str:
+        """Fixed-width column for run result: green ✓, red ✗, or blank (not run / noop)."""
+        if is_noop:
+            return '    '
+        code = step_status[i]
+        if code is None:
+            return '    '
+        if code == 0:
+            return f'{Style.GREEN}✓{Style.RESET}  '
+        return f'{Style.RED}✗{Style.RESET}  '
+
+    @staticmethod
     def draw_menu(
         steps: list,
         selected: int,
         mode_label: str,
         max_length: int,
+        step_status: list[int | None],
     ) -> None:
         Screen.clear()
         header = f'[ {mode_label} ]  ↑/↓ or j/k to move, ENTER to run, q to quit'
@@ -221,11 +234,14 @@ class Menu:
             help_ = Menu._step_help_text(step)
             is_noop = Menu._is_noop(step)
             is_sel = i == selected
+            status_prefix = Menu._status_prefix(i, step_status, is_noop)
 
             if is_noop:
                 # Comment/notice line – always dimmed, never selectable
-                note = f'  ─── {help_} ───'
-                print(f'{Style.DIM}{Style.YELLOW}{note}{Style.RESET}')
+                note = f'─── {help_} ───'
+                print(
+                    f' {status_prefix}{Style.DIM}{Style.YELLOW}{note}{Style.RESET}',
+                )
                 continue
 
             # Build display row
@@ -233,10 +249,13 @@ class Menu:
             suffix = f'  {Style.DIM}({help_}){Style.RESET}' if help_ else ''
 
             if is_sel:
-                print(f' {Style.REVERSE}{row_label:{max_length}}{Style.RESET}{suffix}', end='')
+                print(
+                    f' {status_prefix}{Style.REVERSE}{row_label:{max_length}}{Style.RESET}{suffix}',
+                    end='',
+                )
                 print()
             else:
-                print(f' {row_label}{suffix}')
+                print(f' {status_prefix}{row_label}{suffix}')
 
         print()
 
@@ -275,6 +294,7 @@ class Menu:
     def _run_steps_until_menu_return(
         steps: list,
         selected: int,
+        step_status: list[int | None],
     ) -> int:
         """Run step(s) starting at selected; return selected index when returning to the menu."""
         visited: set[int] = set()
@@ -292,6 +312,7 @@ class Menu:
             exit_code = Command.run(step)
 
             if exit_code != 0:
+                step_status[selected] = exit_code
                 on_error = step.get('on_error')
                 if on_error and isinstance(on_error, list):
                     print(f'\n{Style.YELLOW}Running on_error commands…{Style.RESET}\n')
@@ -310,6 +331,8 @@ class Menu:
                 )
                 Keyboard.read_key()
                 return selected
+
+            step_status[selected] = 0
 
             advanced = Menu.next_runnable(steps, selected)
             if advanced == selected:
@@ -343,8 +366,10 @@ class Menu:
             while selected < len(steps) and Menu._is_noop(steps[selected]):
                 selected += 1
 
+            step_status: list[int | None] = [None] * len(steps)
+
             while True:
-                Menu.draw_menu(steps, selected, mode_label, max_length)
+                Menu.draw_menu(steps, selected, mode_label, max_length, step_status)
 
                 key = Keyboard.read_key()
 
@@ -368,7 +393,7 @@ class Menu:
                     if label == '-- quit --':
                         sys.exit(0)
 
-                    selected = Menu._run_steps_until_menu_return(steps, selected)
+                    selected = Menu._run_steps_until_menu_return(steps, selected, step_status)
         finally:
             Screen.leave_alternate()
 
