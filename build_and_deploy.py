@@ -393,6 +393,38 @@ def interpolate_variables(text: str, definitions: VariableDefinitions) -> str:
     return _VAR_PATTERN.sub(repl, text)
 
 
+def verify_signature(json_path: str) -> dict:
+    """
+    Verify the signature of a JSON file.
+    """
+
+    PUBLIC_KEY_PEM = b"""-----BEGIN PUBLIC KEY-----
+    MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEJfSZvTu45JYuI0TfxN++BQ1T8PF8
+    gCecw0LKIKRJJIqDlKNE53dm1EKEvgFiqFhSkUFfRdGDlGUMTrylpo3fAA==
+    -----END PUBLIC KEY-----"""
+
+    from cryptography.hazmat.primitives import hashes, serialization
+
+    public_key = serialization.load_pem_public_key(PUBLIC_KEY_PEM)
+
+    import base64
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.exceptions import InvalidSignature
+
+    sig_path = json_path + '.sig'
+
+    with open(json_path, 'rb') as f:
+        raw = f.read()
+    with open(sig_path, 'rb') as f:
+        signature = base64.b64decode(f.read())
+
+    try:
+        public_key.verify(signature, raw, ec.ECDSA(hashes.SHA256()))
+    except InvalidSignature:
+        print('FATAL: Signature verification failed. Refusing to run.', file=sys.stderr)
+        sys.exit(1)
+
+
 def load_config(config_path: list[str], json_file: str | None = None) -> dict:
     """
     Load config from a JSON file. If ``json_file`` resolves to an existing path
@@ -427,6 +459,9 @@ def load_config(config_path: list[str], json_file: str | None = None) -> dict:
                 file=sys.stderr,
             )
             sys.exit(1)
+
+    verify_signature(json_path)
+
     try:
         with open(json_path) as f:
             config = json.load(f)
@@ -435,7 +470,10 @@ def load_config(config_path: list[str], json_file: str | None = None) -> dict:
         sys.exit(1)
 
     if not isinstance(config, dict):
-        print(f'ERROR: Expected top-level JSON object in {json_path}, got {type(config).__name__}', file=sys.stderr)
+        print(
+            f'ERROR: Expected top-level JSON object in {json_path}, got {type(config).__name__}',
+            file=sys.stderr,
+        )
         sys.exit(1)
     if 'steps' not in config or not isinstance(config.get('steps'), dict):
         print(f'ERROR: Missing or invalid "steps" key in {json_path}', file=sys.stderr)
@@ -478,6 +516,7 @@ def _cleanup_temp_directory() -> None:
 
 
 _cleaning_up = False
+
 
 def _on_signal(signum: int, _frame) -> None:
     """Restore terminal and remove temp dir before exiting on common signals."""
