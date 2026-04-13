@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+
+if [ $# -eq 0 ]
+then
+    echo "ERROR: You must provide at least one file to be signed."
+    exit 1
+fi
+
+
+while [ $# -gt 0 ]
+do
+    F="$1"
+
+    echo -n "Signing $F..."
+
+    gpg --detach-sign "$F"
+
+    echo "done."
+
+    shift
+done
+
