@@ -25,7 +25,10 @@ they are skipped by navigation and cannot be run.
 
 import argparse
 import json
+import logging
+import logging.handlers
 import os
+import pwd
 import re
 import shutil
 import signal
@@ -37,6 +40,17 @@ import tty
 from collections.abc import Callable
 from datetime import datetime
 
+# Linux: rsyslog (etc.) exposes /dev/log. macOS syslogd uses /var/run/syslog.
+_SYSLOG_SOCKET = '/var/run/syslog' if sys.platform == 'darwin' else '/dev/log'
+
+try:
+    _handler: logging.Handler = logging.handlers.SysLogHandler(address=_SYSLOG_SOCKET)
+    _handler.setFormatter(logging.Formatter('%(name)s: %(message)s'))
+except OSError as exc:
+    raise SystemExit(f'Fatal: cannot open syslog socket {_SYSLOG_SOCKET}: {exc}') from exc
+log = logging.getLogger('build_and_deploy')
+log.addHandler(_handler)
+log.setLevel(logging.INFO)
 
 # The value to be used in {{TMPDIR}} substitutions (set in main() after mkdtemp).
 temporary_directory: str | None = None
@@ -52,6 +66,91 @@ variable_definitions: VariableDefinitions = {
 }
 
 _VAR_PATTERN = re.compile(r'\{\{([A-Za-z0-9_]+)\}\}')
+
+# Build session context shared with the signal handler (populated in Menu.run_menu).
+_session_context: dict = {}
+
+
+def normalize_step_name(text: str) -> str:
+    text = text.lower().strip()
+    text = re.sub(r'[^a-z0-9]+', '_', text)
+    text = re.sub(r'_+', '_', text)
+    return text.strip('_')
+
+
+def _get_username() -> str:
+    try:
+        return pwd.getpwuid(os.getuid()).pw_name
+    except (KeyError, AttributeError):
+        return str(os.getuid())
+
+
+_KV_LOG_FIELD_ORDER = (
+    'pid',
+    'event',
+    'exit_code',
+    'step_name',
+    'step_num',
+    'deploy_type',
+    'build_name',
+    'build_directory',
+    'user',
+)
+
+# Visible placeholders for named control characters; everything else gets <CTRL>.
+_CTRL_PLACEHOLDERS: dict[str, str] = {
+    '\x00': '<NUL>',
+    '\t': '<TAB>',
+    '\n': '<NL>',
+    '\r': '<CR>',
+    '\x0b': '<VT>',
+    '\x0c': '<FF>',
+}
+_CTRL_RE = re.compile(r'[\x00-\x1f\x7f]')
+
+
+def _replace_ctrl(m: re.Match) -> str:
+    return _CTRL_PLACEHOLDERS.get(m.group(0), '<CTRL>')
+
+
+def _sanitize_log_value(sval: str) -> str:
+    """Sanitize a string value for k=v syslog output.
+
+    Applied in strict order:
+    1. Control chars (0x00-0x1f, 0x7f) → visible placeholder.  Named chars get
+       descriptive tags (<NL>, <TAB>, etc.); others get <CTRL>.  Embedded
+       newlines are the most dangerous vector: they would split a single syslog
+       event across multiple lines, letting an attacker inject fake log entries.
+    2. Remaining whitespace (plain space, Unicode whitespace) → '_'.  After
+       step 1 only non-control whitespace can remain.  Eliminating it ensures
+       the awk-based report parser (which splits on spaces) always sees each
+       key=value pair as a single token, closing the log-injection path.
+    3. Backslash → '\\\\' (must precede quote escaping to avoid double-escaping).
+    4. Double-quote → '\\"' (for humanlog / hl compatibility).
+
+    Integer values bypass this function entirely (see make_kv_log).
+    """
+    sval = _CTRL_RE.sub(_replace_ctrl, sval)  # step 1: control chars → placeholders
+    sval = re.sub(r'\s', '_', sval)  # step 2: remaining whitespace → _
+    sval = sval.replace('\\', '\\\\')  # step 3: backslash
+    sval = sval.replace('"', '\\"')  # step 4: double-quote
+    return sval
+
+
+def make_kv_log(prefix: str, **fields: object) -> str:
+    priority = {key: i for i, key in enumerate(_KV_LOG_FIELD_ORDER)}
+    ordered = sorted(
+        fields.items(), key=lambda kv: (priority.get(kv[0], len(_KV_LOG_FIELD_ORDER)), kv[0])
+    )
+    parts = [prefix]
+    for key, value in ordered:
+        if value is None:
+            continue
+        if isinstance(value, int):
+            parts.append(f'{key}={value}')
+        else:
+            parts.append(f'{key}={_sanitize_log_value(str(value))}')
+    return ' '.join(parts)
 
 
 # ─────────────────────────────────────────────
@@ -133,6 +232,11 @@ class Command:
     def run(
         step: dict,
         *,
+        deploy_type: str,
+        build_name: str,
+        build_directory: str,
+        step_num: int,
+        is_on_error: bool = False,
         suppress_pre_separator: bool = False,
         suppress_post_separator: bool = False,
         suppress_command_header: bool = False,
@@ -147,6 +251,30 @@ class Command:
         stdin_raw = step.get('input')  # optional string fed to stdin
         stdin_ = interpolate_variables(stdin_raw, defs) if isinstance(stdin_raw, str) else stdin_raw
         help_ = interpolate_variables(step.get('help', ''), defs)
+
+        common = dict(
+            pid=os.getpid(),
+            step_num=step_num,
+            deploy_type=deploy_type,
+            build_name=build_name,
+            build_directory=build_directory,
+            user=_get_username(),
+        )
+
+        # Help-only entries are notifications, not runnable steps.
+        if not text and help_:
+            log.info(
+                make_kv_log(
+                    'build_event', event='notify', step_name=normalize_step_name(help_), **common
+                )
+            )
+            print(f'\n{Style.YELLOW}ℹ  {help_}{Style.RESET}\n')
+            return 0
+
+        step_name = normalize_step_name(text)
+        ev = 'on_error_' if is_on_error else ''
+
+        log.info(make_kv_log('build_event', event=f'{ev}start', step_name=step_name, **common))
 
         if help_:
             print(f'\n{Style.YELLOW}ℹ  {help_}{Style.RESET}\n')
@@ -173,6 +301,22 @@ class Command:
 
         if not suppress_post_separator:
             print('─' * min(get_term_width(), 72))
+
+        if exit_code == 0:
+            log.info(
+                make_kv_log('build_event', event=f'{ev}complete', step_name=step_name, **common)
+            )
+        else:
+            log.info(
+                make_kv_log(
+                    'build_event',
+                    event=f'{ev}failed',
+                    step_name=step_name,
+                    exit_code=exit_code,
+                    **common,
+                )
+            )
+
         return exit_code
 
 
@@ -199,16 +343,13 @@ class Menu:
         return 'text' not in step
 
     @staticmethod
-    def _status_prefix(i: int, step_status: list[int | None], is_noop: bool) -> str:
-        """Fixed-width column for run result: green ✓, red ✗, or blank (not run / noop)."""
-        if is_noop:
-            return '    '
-        code = step_status[i]
-        if code is None:
-            return '    '
-        if code == 0:
-            return f'{Style.GREEN}✓{Style.RESET}  '
-        return f'{Style.RED}✗{Style.RESET}  '
+    def _step_status_prefix(step_index: int, step_status: dict[int, bool]) -> str:
+        """Two visible columns: green ✓ (last success), red ✗ (last failure), or blank."""
+        if step_index not in step_status:
+            return '  '
+        if step_status[step_index]:
+            return f'{Style.GREEN}✓{Style.RESET} '
+        return f'{Style.RED}✗{Style.RESET} '
 
     @staticmethod
     def draw_menu(
@@ -216,7 +357,7 @@ class Menu:
         selected: int,
         mode_label: str,
         max_length: int,
-        step_status: list[int | None],
+        step_status: dict[int, bool],
     ) -> None:
         Screen.clear()
         header = f'[ {mode_label} ]  ↑/↓ or j/k to move, ENTER to run, q to quit'
@@ -234,28 +375,25 @@ class Menu:
             help_ = Menu._step_help_text(step)
             is_noop = Menu._is_noop(step)
             is_sel = i == selected
-            status_prefix = Menu._status_prefix(i, step_status, is_noop)
 
             if is_noop:
                 # Comment/notice line – always dimmed, never selectable
-                note = f'─── {help_} ───'
-                print(
-                    f' {status_prefix}{Style.DIM}{Style.YELLOW}{note}{Style.RESET}',
-                )
+                note = f'  ─── {help_} ───'
+                print(f'{Style.DIM}{Style.YELLOW}{note}{Style.RESET}')
                 continue
 
             # Build display row
             row_label = f' {label}'
             suffix = f'  {Style.DIM}({help_}){Style.RESET}' if help_ else ''
 
+            pref = Menu._step_status_prefix(i, step_status)
             if is_sel:
                 print(
-                    f' {status_prefix}{Style.REVERSE}{row_label:{max_length}}{Style.RESET}{suffix}',
-                    end='',
+                    f' {pref}{Style.REVERSE}{row_label:{max_length}}{Style.RESET}{suffix}', end=''
                 )
                 print()
             else:
-                print(f' {status_prefix}{row_label}{suffix}')
+                print(f' {pref}{row_label}{suffix}')
 
         print()
 
@@ -294,7 +432,11 @@ class Menu:
     def _run_steps_until_menu_return(
         steps: list,
         selected: int,
-        step_status: list[int | None],
+        *,
+        deploy_type: str,
+        build_name: str,
+        build_directory: str,
+        step_status: dict[int, bool],
     ) -> int:
         """Run step(s) starting at selected; return selected index when returning to the menu."""
         visited: set[int] = set()
@@ -309,17 +451,28 @@ class Menu:
             visited.add(selected)
             step = steps[selected]
             Screen.clear()
-            exit_code = Command.run(step)
+            exit_code = Command.run(
+                step,
+                deploy_type=deploy_type,
+                build_name=build_name,
+                build_directory=build_directory,
+                step_num=selected + 1,
+            )
+            step_status[selected] = exit_code == 0
 
             if exit_code != 0:
-                step_status[selected] = exit_code
                 on_error = step.get('on_error')
                 if on_error and isinstance(on_error, list):
                     print(f'\n{Style.YELLOW}Running on_error commands…{Style.RESET}\n')
                     for cmd in on_error:
                         if isinstance(cmd, str):
                             Command.run(
-                                {'command': cmd},
+                                {'command': cmd, 'text': cmd},
+                                deploy_type=deploy_type,
+                                build_name=build_name,
+                                build_directory=build_directory,
+                                step_num=selected + 1,
+                                is_on_error=True,
                                 suppress_pre_separator=True,
                                 suppress_post_separator=True,
                                 suppress_command_header=True,
@@ -331,8 +484,6 @@ class Menu:
                 )
                 Keyboard.read_key()
                 return selected
-
-            step_status[selected] = 0
 
             advanced = Menu.next_runnable(steps, selected)
             if advanced == selected:
@@ -354,19 +505,30 @@ class Menu:
 
             next_step = steps[selected]
             if next_step.get('text') == '-- quit --':
+                log.info(make_kv_log('build_event', event='user-quit-menu', **_session_context))
                 sys.exit(0)
 
     @staticmethod
-    def run_menu(steps: list, mode_label: str) -> None:
+    def run_menu(
+        steps: list, mode_label: str, *, deploy_type: str, build_name: str, build_directory: str
+    ) -> None:
         Screen.enter_alternate()
+        global _session_context
+        _session_context = dict(
+            pid=os.getpid(),
+            user=_get_username(),
+            deploy_type=deploy_type,
+            build_name=build_name,
+            build_directory=build_directory,
+        )
         try:
             selected = 0
+            log.info(make_kv_log('build_event', event='program-start', **_session_context))
 
             max_length = max(len(Menu._step_display_text(step)) for step in steps)
+            step_status: dict[int, bool] = {}
             while selected < len(steps) and Menu._is_noop(steps[selected]):
                 selected += 1
-
-            step_status: list[int | None] = [None] * len(steps)
 
             while True:
                 Menu.draw_menu(steps, selected, mode_label, max_length, step_status)
@@ -380,6 +542,9 @@ class Menu:
                     selected = Menu._navigate_down(steps, selected)
 
                 elif key in ('q', 'Q', '\x03'):  # q / Ctrl-C
+                    log.info(
+                        make_kv_log('build_event', event='user-quit-keypress', **_session_context)
+                    )
                     sys.exit(0)
 
                 elif key in ('\r', '\n'):  # Enter
@@ -391,9 +556,19 @@ class Menu:
                     label = step.get('text', '')
 
                     if label == '-- quit --':
+                        log.info(
+                            make_kv_log('build_event', event='user-quit-menu', **_session_context)
+                        )
                         sys.exit(0)
 
-                    selected = Menu._run_steps_until_menu_return(steps, selected, step_status)
+                    selected = Menu._run_steps_until_menu_return(
+                        steps,
+                        selected,
+                        deploy_type=deploy_type,
+                        build_name=build_name,
+                        build_directory=build_directory,
+                        step_status=step_status,
+                    )
         finally:
             Screen.leave_alternate()
 
@@ -418,39 +593,43 @@ def interpolate_variables(text: str, definitions: VariableDefinitions) -> str:
     return _VAR_PATTERN.sub(repl, text)
 
 
-def verify_signature(json_path: str) -> dict:
+def verify_json_signature(json_path: str) -> None:
+    """Verify a detached GPG signature for ``json_path``.
+
+    The signature file is ``json_path`` with ``.sig`` appended (e.g.
+    ``config.json`` → ``config.json.sig``), in the same directory.
+
+    On failure, prints to stderr and terminates the process with exit code 1.
     """
-    Verify the signature of a JSON file.
-    """
-
-    PUBLIC_KEY_PEM = b"""-----BEGIN PUBLIC KEY-----
-    MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEJfSZvTu45JYuI0TfxN++BQ1T8PF8
-    gCecw0LKIKRJJIqDlKNE53dm1EKEvgFiqFhSkUFfRdGDlGUMTrylpo3fAA==
-    -----END PUBLIC KEY-----"""
-
-    from cryptography.hazmat.primitives import hashes, serialization
-
-    public_key = serialization.load_pem_public_key(PUBLIC_KEY_PEM)
-
-    import base64
-    from cryptography.hazmat.primitives.asymmetric import ec
-    from cryptography.exceptions import InvalidSignature
 
     sig_path = json_path + '.sig'
-
     if not os.path.isfile(sig_path):
-        print(f'FATAL: Signature file not found: {sig_path}', file=sys.stderr)
+        print(
+            f'ERROR: Signature file not found (expected adjacent to JSON): {sig_path}',
+            file=sys.stderr,
+        )
         sys.exit(1)
-
-    with open(json_path, 'rb') as f:
-        raw = f.read()
-    with open(sig_path, 'rb') as f:
-        signature = base64.b64decode(f.read())
-
     try:
-        public_key.verify(signature, raw, ec.ECDSA(hashes.SHA256()))
-    except InvalidSignature:
-        print('FATAL: Signature verification failed. Refusing to run.', file=sys.stderr)
+        result = subprocess.run(
+            ['gpg', '--verify', sig_path, json_path],
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError:
+        print(
+            'ERROR: gpg not found on PATH; cannot verify JSON signature.',
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    except OSError as exc:
+        print(f'ERROR: Could not run gpg: {exc}', file=sys.stderr)
+        sys.exit(1)
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or '').strip()
+        msg = f'ERROR: GPG signature verification failed for {json_path}.'
+        if detail:
+            msg = f'{msg}\n{detail}'
+        print(msg, file=sys.stderr)
         sys.exit(1)
 
 
@@ -489,7 +668,7 @@ def load_config(config_path: list[str], json_file: str | None = None) -> dict:
             )
             sys.exit(1)
 
-    verify_signature(json_path)
+    verify_json_signature(json_path)
 
     try:
         with open(json_path) as f:
@@ -557,6 +736,12 @@ def _on_signal(signum: int, _frame) -> None:
         Screen.leave_alternate()
     except OSError:
         pass
+    if _session_context:
+        try:
+            sig_name = signal.Signals(signum).name
+        except ValueError:
+            sig_name = str(signum)
+        log.info(make_kv_log('build_event', event=f'received-{sig_name}', **_session_context))
     _cleanup_temp_directory()
     sys.exit(128 + signum)
 
@@ -620,6 +805,7 @@ def main() -> None:
     settings = config.get('settings') or {}
 
     build_name = settings.get('build_name', 'build_and_deploy')
+    build_directory = settings.get('build_directory', '')
 
     global temporary_directory
     temporary_directory = _make_temp_directory(prefix=build_name, suffix=str(os.getpid()))
@@ -628,13 +814,16 @@ def main() -> None:
 
     try:
         build_type: str | None = None
+        deploy_type: str | None = None
 
         if args.backend_only:
             steps = config.get('steps', {}).get('backend')
             build_type = 'BACKEND ONLY'
+            deploy_type = 'backend'
         else:
             steps = config.get('steps', {}).get('full')
             build_type = 'FULL DEPLOY'
+            deploy_type = 'full'
 
         if not steps:
             print(f'ERROR: No steps found for {build_type}.')
@@ -660,8 +849,15 @@ def main() -> None:
             cwd_real = os.path.realpath(os.getcwd())
             if cwd_real != target:
                 os.chdir(target)
+            build_directory = target
 
-        Menu.run_menu(steps, build_type)
+        Menu.run_menu(
+            steps,
+            build_type,
+            deploy_type=deploy_type,
+            build_name=build_name,
+            build_directory=build_directory,
+        )
     finally:
         global _cleaning_up
         if not _cleaning_up:
