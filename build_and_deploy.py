@@ -10,14 +10,22 @@ Each step is defined as a dict with optional keys:
   input        - optional string fed to the subprocess stdin (UTF-8). Use embedded
                  newlines for multiple prompts (e.g. ``"y\\n"``). If omitted, the
                  command inherits this process's stdin/stdout/stderr.
-  auto_advance - if true, on success automatically run the next step
+  auto_advance - if true, on success automatically exit back to the menu and
+                 select the next runnable step (but do NOT run it)
+  auto_start   - if true, automatically run the step when it becomes selected
+                 in the menu (including after an auto_advance step completes)
   on_error     - array of shell commands to run synchronously when the step fails
+
+The JSON file may include a top-level ``settings`` object, for example:
+  auto_advance_delay - number of seconds to pause after an auto_advance step completes
+                       and again before the next step starts (default: 3)
 
 Any other key whose name starts with ``comment`` (e.g. ``comment``, ``comment_note``,
 ``comment1``, ``comment2``, etc.) is ignored; use those for documentation in the JSON only.
 
 Placeholders ``{{NAME}}`` in text, command, help, and input are replaced using
-the module-level ``variable_definitions`` map (e.g. {{PID}}, {{DATE}}, {{TIME}}).
+the module-level ``variable_definitions`` map (e.g. {{PID}}, {{DATE}}, {{TIME}},
+{{USERNAME}}).
 
 Steps without a 'text' key are display-only section lines (usually just 'help');
 they are skipped by navigation and cannot be run.
@@ -25,7 +33,6 @@ they are skipped by navigation and cannot be run.
 
 import argparse
 import json
-import logging
 import logging.handlers
 import os
 import pwd
@@ -33,10 +40,13 @@ import re
 import shutil
 import signal
 import subprocess
+import time
 import sys
 import tempfile
 import termios
 import tty
+import urllib.error
+import urllib.request
 from collections.abc import Callable
 from datetime import datetime
 
@@ -55,6 +65,9 @@ log.setLevel(logging.INFO)
 # The value to be used in {{TMPDIR}} substitutions (set in main() after mkdtemp).
 temporary_directory: str | None = None
 
+# Slack credentials file path (set in main() from settings.slack_credentials).
+slack_credentials_path: str | None = None
+
 # Values may be literal strings or zero-argument callables returning a string (evaluated when used).
 VariableDefinitions = dict[str, str | Callable[[], str]]
 
@@ -63,6 +76,9 @@ variable_definitions: VariableDefinitions = {
     'DATE': lambda: datetime.now().strftime('%Y-%m-%d'),
     'TIME': lambda: datetime.now().strftime('%H:%M:%S'),
     'TMPDIR': lambda: temporary_directory if temporary_directory is not None else '/tmp',
+    'USERNAME': lambda: _operator_username(),
+    'SLACK_RTB_GENERAL': 'C07JJ03F802',
+    'SLACK_DEV_GENERAL': 'C064603CX9T',
 }
 
 _VAR_PATTERN = re.compile(r'\{\{([A-Za-z0-9_]+)\}\}')
@@ -83,6 +99,42 @@ def _get_username() -> str:
         return pwd.getpwuid(os.getuid()).pw_name
     except (KeyError, AttributeError):
         return str(os.getuid())
+
+
+def _operator_username() -> str:
+    """Human operator name for logs, lock messages, and ``{{USERNAME}}``; not always the Unix login (e.g. root)."""
+    v = os.environ.get('BUILD_AND_DEPLOY_USERNAME', '').strip()
+    if len(v) >= 3:
+        return v
+    return _get_username()
+
+
+def _require_build_and_deploy_username() -> str:
+    """Return a trimmed username (at least 3 characters).
+
+    Reuses ``BUILD_AND_DEPLOY_USERNAME`` from the environment when already set
+    (e.g. after re-exec under ``ci-lock.sh``). Otherwise prompts on a TTY or exits
+    with an error when stdin is not a TTY.
+    """
+    existing = os.environ.get('BUILD_AND_DEPLOY_USERNAME', '').strip()
+    if len(existing) >= 3:
+        return existing
+    if sys.stdin.isatty():
+        while True:
+            print('Enter your username. It is used for messaging:')
+            try:
+                name = input('> ').strip()
+            except EOFError:
+                name = ''
+            if len(name) >= 3:
+                return name
+            print('Username must be at least 3 characters.', file=sys.stderr)
+    print(
+        'ERROR: Non-interactive use requires BUILD_AND_DEPLOY_USERNAME in the environment '
+        '(at least 3 characters).',
+        file=sys.stderr,
+    )
+    sys.exit(1)
 
 
 _KV_LOG_FIELD_ORDER = (
@@ -251,6 +303,7 @@ class Command:
         stdin_raw = step.get('input')  # optional string fed to stdin
         stdin_ = interpolate_variables(stdin_raw, defs) if isinstance(stdin_raw, str) else stdin_raw
         help_ = interpolate_variables(step.get('help', ''), defs)
+        slack_step = step.get('slack')
 
         common = dict(
             pid=os.getpid(),
@@ -258,7 +311,7 @@ class Command:
             deploy_type=deploy_type,
             build_name=build_name,
             build_directory=build_directory,
-            user=_get_username(),
+            user=_operator_username(),
         )
 
         # Help-only entries are notifications, not runnable steps.
@@ -278,6 +331,28 @@ class Command:
 
         if help_:
             print(f'\n{Style.YELLOW}ℹ  {help_}{Style.RESET}\n')
+
+        if slack_step is not None:
+            exit_code = Command._run_slack_step(
+                text=text,
+                slack_step=slack_step,
+                defs=defs,
+            )
+            if exit_code == 0:
+                log.info(
+                    make_kv_log('build_event', event=f'{ev}complete', step_name=step_name, **common)
+                )
+            else:
+                log.info(
+                    make_kv_log(
+                        'build_event',
+                        event=f'{ev}failed',
+                        step_name=step_name,
+                        exit_code=exit_code,
+                        **common,
+                    )
+                )
+            return exit_code
 
         exit_code = 1
         if not suppress_command_header:
@@ -318,6 +393,80 @@ class Command:
             )
 
         return exit_code
+
+    @staticmethod
+    def _run_slack_step(*, text: str, slack_step: object, defs: VariableDefinitions) -> int:
+        if not isinstance(slack_step, dict):
+            print(f'{Style.RED}ERROR: slack step must be an object/dict{Style.RESET}')
+            return 2
+
+        channel_id_raw = slack_step.get('channel_id')
+        if not isinstance(channel_id_raw, str) or not channel_id_raw.strip():
+            print(f'{Style.RED}ERROR: slack.channel_id must be set{Style.RESET}')
+            return 2
+        channel_id = interpolate_variables(channel_id_raw, defs).strip()
+
+        template_raw = slack_step.get('template')
+        text_raw = slack_step.get('text')
+        text_file_raw = slack_step.get('text_file')
+
+        if template_raw is not None and not isinstance(template_raw, str):
+            print(f'{Style.RED}ERROR: slack.template must be a string{Style.RESET}')
+            return 2
+        if text_raw is not None and not isinstance(text_raw, str):
+            print(f'{Style.RED}ERROR: slack.text must be a string{Style.RESET}')
+            return 2
+        if text_file_raw is not None and not isinstance(text_file_raw, str):
+            print(f'{Style.RED}ERROR: slack.text_file must be a string{Style.RESET}')
+            return 2
+
+        file_content: str | None = None
+        if isinstance(text_file_raw, str):
+            path = interpolate_variables(text_file_raw, defs)
+            try:
+                with open(path, 'r', encoding='utf-8', errors='replace') as f:
+                    file_content = f.read().rstrip()
+            except OSError as exc:
+                print(
+                    f'{Style.RED}ERROR: could not read slack.text_file {path}: {exc}{Style.RESET}'
+                )
+                return 1
+
+        if template_raw is not None:
+            template = interpolate_variables(template_raw, defs)
+            message = template.format(file=_slack_sanitize_mrkdwn_fenced_insert(file_content or ''))
+        elif text_raw is not None:
+            message = interpolate_variables(text_raw, defs)
+        else:
+            print(
+                f'{Style.RED}ERROR: slack step must set slack.text or slack.template{Style.RESET}'
+            )
+            return 2
+
+        creds_path = slack_credentials_path
+        if not creds_path:
+            print(
+                f'{Style.RED}ERROR: settings.slack_credentials is not configured in JSON{Style.RESET}'
+            )
+            return 2
+
+        try:
+            token = _read_slack_token(creds_path)
+        except (OSError, ValueError) as exc:
+            print(f'{Style.RED}ERROR: could not read Slack token: {exc}{Style.RESET}')
+            return 1
+
+        print(f'{Style.BOLD}>>> Slack: {text}{Style.RESET}')
+        print('─' * min(get_term_width(), 72))
+        try:
+            _slack_post_message(token=token, channel_id=channel_id, text=message)
+        except RuntimeError as exc:
+            print(f'{Style.RED}ERROR: Slack post failed: {exc}{Style.RESET}')
+            print('─' * min(get_term_width(), 72))
+            return 1
+        print(f'{Style.GREEN}✓  Slack message sent.{Style.RESET}')
+        print('─' * min(get_term_width(), 72))
+        return 0
 
 
 # ─────────────────────────────────────────────
@@ -437,18 +586,10 @@ class Menu:
         build_name: str,
         build_directory: str,
         step_status: dict[int, bool],
+        auto_advance_delay: float,
     ) -> int:
         """Run step(s) starting at selected; return selected index when returning to the menu."""
-        visited: set[int] = set()
         while True:
-            if selected in visited:
-                print(
-                    f'\n{Style.YELLOW}⚠  Auto-advance cycle detected at step {selected}. '
-                    f'Returning to menu.{Style.RESET}'
-                )
-                Keyboard.read_key()
-                return selected
-            visited.add(selected)
             step = steps[selected]
             Screen.clear()
             exit_code = Command.run(
@@ -495,34 +636,39 @@ class Menu:
                 return selected
 
             selected = advanced
-            if not step.get('auto_advance'):
-                print(
-                    f'\n{Style.GREEN}✓  Step complete.{Style.RESET}  '
-                    'Press any key to continue to the next step…'
-                )
-                Keyboard.read_key()
+            if step.get('auto_advance'):
+                time.sleep(auto_advance_delay)
                 return selected
 
-            next_step = steps[selected]
-            if next_step.get('text') == '-- quit --':
-                log.info(make_kv_log('build_event', event='user-quit-menu', **_session_context))
-                sys.exit(0)
+            print(
+                f'\n{Style.GREEN}✓  Step complete.{Style.RESET}  '
+                'Press any key to continue to the next step…'
+            )
+            Keyboard.read_key()
+            return selected
 
     @staticmethod
     def run_menu(
-        steps: list, mode_label: str, *, deploy_type: str, build_name: str, build_directory: str
+        steps: list,
+        mode_label: str,
+        *,
+        deploy_type: str,
+        build_name: str,
+        build_directory: str,
+        auto_advance_delay: float,
     ) -> None:
         Screen.enter_alternate()
         global _session_context
         _session_context = dict(
             pid=os.getpid(),
-            user=_get_username(),
+            user=_operator_username(),
             deploy_type=deploy_type,
             build_name=build_name,
             build_directory=build_directory,
         )
         try:
             selected = 0
+            auto_start_armed = True
             log.info(make_kv_log('build_event', event='program-start', **_session_context))
 
             max_length = max(len(Menu._step_display_text(step)) for step in steps)
@@ -533,13 +679,36 @@ class Menu:
             while True:
                 Menu.draw_menu(steps, selected, mode_label, max_length, step_status)
 
+                step = steps[selected]
+                if (
+                    auto_start_armed
+                    and not Menu._is_noop(step)
+                    and step.get('auto_start')
+                    and selected not in step_status
+                    and step.get('text') != '-- quit --'
+                ):
+                    auto_start_armed = False
+                    selected = Menu._run_steps_until_menu_return(
+                        steps,
+                        selected,
+                        deploy_type=deploy_type,
+                        build_name=build_name,
+                        build_directory=build_directory,
+                        step_status=step_status,
+                        auto_advance_delay=auto_advance_delay,
+                    )
+                    auto_start_armed = True
+                    continue
+
                 key = Keyboard.read_key()
 
                 if key in ('\x1b[A', '\x1b[D', 'k', 'K'):  # Up / Left (vi: k)
                     selected = Menu._navigate_up(steps, selected)
+                    auto_start_armed = True
 
                 elif key in ('\x1b[B', '\x1b[C', 'j', 'J'):  # Down / Right (vi: j)
                     selected = Menu._navigate_down(steps, selected)
+                    auto_start_armed = True
 
                 elif key in ('q', 'Q', '\x03'):  # q / Ctrl-C
                     log.info(
@@ -568,7 +737,9 @@ class Menu:
                         build_name=build_name,
                         build_directory=build_directory,
                         step_status=step_status,
+                        auto_advance_delay=auto_advance_delay,
                     )
+                    auto_start_armed = True
         finally:
             Screen.leave_alternate()
 
@@ -591,6 +762,80 @@ def interpolate_variables(text: str, definitions: VariableDefinitions) -> str:
         return str(value)
 
     return _VAR_PATTERN.sub(repl, text)
+
+
+# Lines that are only backticks or tildes (optional indent) act as fenced-code
+# boundaries in Slack mrkdwn; a ``` block opened in the template is closed
+# early if pasted merge text contains e.g. a standalone `~~~` line.
+_SLACK_MRKDWN_FENCE_LINE = re.compile(r'^[ \t]*(?:`{3,}|~{3,})\s*$')
+
+
+def _slack_sanitize_mrkdwn_fenced_insert(body: str) -> str:
+    """
+    Prefix zero-width spaces onto lines that would otherwise be parsed as
+    closing (or opening) a Slack mrkdwn fenced code block inside ``{file}``.
+    """
+
+    def fix_line(line: str) -> str:
+        if _SLACK_MRKDWN_FENCE_LINE.match(line):
+            return '\u200b' + line
+        return line
+
+    return '\n'.join(fix_line(line) for line in body.split('\n'))
+
+
+def _read_slack_token(credentials_path: str) -> str:
+    """
+    Read a Slack bot token from a simple key=value credentials file.
+
+    Expected format (whitespace is ignored):
+      slack-token = xoxb-...
+    """
+    with open(credentials_path, 'r', encoding='utf-8', errors='replace') as f:
+        for raw in f:
+            line = raw.strip()
+            if not line or line.startswith('#') or line.startswith(';'):
+                continue
+            if '=' not in line:
+                continue
+            key, val = line.split('=', 1)
+            key = key.strip().lower()
+            val = val.strip().strip('"').strip("'")
+            if key in ('slack-token', 'slack_token', 'token'):
+                if not val:
+                    raise ValueError(f'Empty {key} in {credentials_path}')
+                return val
+    raise ValueError(f'No slack-token entry found in {credentials_path}')
+
+
+def _slack_post_message(*, token: str, channel_id: str, text: str) -> None:
+    url = 'https://slack.com/api/chat.postMessage'
+    body = json.dumps({'channel': channel_id, 'text': text}).encode('utf-8')
+    req = urllib.request.Request(
+        url,
+        method='POST',
+        data=body,
+        headers={
+            'Authorization': f'Bearer {token}',
+            'Content-Type': 'application/json; charset=utf-8',
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            raw = resp.read().decode('utf-8', errors='replace')
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode('utf-8', errors='replace') if exc.fp else str(exc)
+        raise RuntimeError(f'HTTP {exc.code}: {detail}') from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(str(exc)) from exc
+
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        raise RuntimeError(f'Non-JSON response: {raw[:2000]}')
+    if not isinstance(parsed, dict) or not parsed.get('ok'):
+        err = parsed.get('error') if isinstance(parsed, dict) else None
+        raise RuntimeError(f'Slack API error: {err or raw[:2000]}')
 
 
 def verify_json_signature(json_path: str) -> None:
@@ -626,7 +871,7 @@ def verify_json_signature(json_path: str) -> None:
         sys.exit(1)
     if result.returncode != 0:
         detail = (result.stderr or result.stdout or '').strip()
-        msg = f'ERROR: GPG signature verification failed for {json_path}.'
+        msg = f'ERROR: GPG signature verification failed for {json_path}. Refusing to run.'
         if detail:
             msg = f'{msg}\n{detail}'
         print(msg, file=sys.stderr)
@@ -688,6 +933,25 @@ def load_config(config_path: list[str], json_file: str | None = None) -> dict:
         sys.exit(1)
 
     return config
+
+
+def _auto_advance_delay_seconds(settings: dict) -> float:
+    """Return delay in seconds for auto_advance pauses. Default 2. Exits on invalid value."""
+    raw = settings.get('auto_advance_delay', 2)
+    if raw is None:
+        return 2.0
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        print(
+            'ERROR: settings.auto_advance_delay must be a number (seconds), not '
+            f'{type(raw).__name__}.',
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    n = float(raw)
+    if n < 0:
+        print('ERROR: settings.auto_advance_delay must be non-negative.', file=sys.stderr)
+        sys.exit(1)
+    return n
 
 
 def _ensure_quit_step(steps: list) -> None:
@@ -754,6 +1018,67 @@ def _register_signal_handlers() -> None:
             pass
 
 
+_CI_LOCK_META = '/tmp/ci.lock.meta'
+
+
+def _acquire_ci_lock_or_reexec() -> None:
+    """Ensure this process runs under ci-lock.sh.
+
+    Asks ci-lock.sh for the current holder PID; if that PID is already one of
+    our ancestors (per check-ancestor-pid.sh) we are already protected and
+    return. If someone else holds it, bail out. Otherwise prompt for a lock
+    message and execvp into ci-lock.sh, which acquires the lock and re-runs
+    this script as its child.
+    """
+    try:
+        probe = subprocess.run(['ci-lock.sh', '-p'], capture_output=True, text=True, check=False)
+    except FileNotFoundError:
+        print('ERROR: ci-lock.sh not found in PATH; cannot protect this run.', file=sys.stderr)
+        sys.exit(1)
+
+    holder_pid = probe.stdout.strip()
+    if probe.returncode == 0 and holder_pid:
+        ancestor = subprocess.run(
+            ['check-ancestor-pid.sh', holder_pid],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if ancestor.returncode == 0:
+            return
+
+        print(f'ERROR: ci-lock is held by PID {holder_pid}; cannot start build.', file=sys.stderr)
+        try:
+            with open(_CI_LOCK_META) as f:
+                meta = f.read().rstrip()
+            print(f'--- Current lock metainfo ({_CI_LOCK_META}): ---', file=sys.stderr)
+            for line in meta.splitlines():
+                print(f'  {line}', file=sys.stderr)
+        except OSError:
+            print(f"Run 'ci-lock.sh -p' (or inspect {_CI_LOCK_META}) for details.", file=sys.stderr)
+        sys.exit(1)
+
+    username = _require_build_and_deploy_username()
+    os.environ['BUILD_AND_DEPLOY_USERNAME'] = username
+
+    if sys.stdin.isatty():
+        print('Explain what you are doing (for example, "Paul is building a deploy package"):')
+        try:
+            msg = input('> ').strip()
+        except EOFError:
+            msg = ''
+    else:
+        msg = ''
+    if not msg:
+        msg = f'build_and_deploy by {_operator_username()}'
+
+    script = os.path.abspath(__file__)
+    os.execvp(
+        'ci-lock.sh',
+        ['ci-lock.sh', '-m', msg, '--', sys.executable, script, *sys.argv[1:]],
+    )
+
+
 # ─────────────────────────────────────────────
 # Entry point
 # ─────────────────────────────────────────────
@@ -798,14 +1123,20 @@ def main() -> None:
         parser.print_help()
         sys.exit(0)
 
+    # _acquire_ci_lock_or_reexec()
+
     config_path = ['/usr/local/etc', '~/etc']
 
     config = load_config(config_path, args.json_file)
 
     settings = config.get('settings') or {}
 
+    auto_advance_delay = _auto_advance_delay_seconds(settings)
+
     build_name = settings.get('build_name', 'build_and_deploy')
     build_directory = settings.get('build_directory', '')
+    global slack_credentials_path
+    slack_credentials_path = settings.get('slack_credentials')
 
     global temporary_directory
     temporary_directory = _make_temp_directory(prefix=build_name, suffix=str(os.getpid()))
@@ -857,6 +1188,7 @@ def main() -> None:
             deploy_type=deploy_type,
             build_name=build_name,
             build_directory=build_directory,
+            auto_advance_delay=auto_advance_delay,
         )
     finally:
         global _cleaning_up

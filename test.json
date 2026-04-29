@@ -6,7 +6,8 @@
     "steps": {
         "full": [
             {
-                "text": "git pull"
+                "text": "git pull",
+                "auto_advance": true
             },
             {
                 "text": "./generate_error.sh",
@@ -15,7 +16,9 @@
                     "echo \"Error generated line 2!\"",
                     "echo \"Error generated line 3!\"",
                     "echo \"Error generated line 4!\""
-                ]
+                ],
+                "auto_advance": true,
+                "auto_start": true
             },
             {
                 "text": "test awk",
